@@ -84,6 +84,18 @@ SDL_bool SDL_PointInFRect(const SDL_Point* p, const SDL_FRect* r)
 		(p->y >= r->y) && (p->y < (r->y + r->h))) ? SDL_TRUE : SDL_FALSE;
 }
 
+std::ostream& operator<<(std::ostream& os, SDL_FRect r)
+{
+	os << r.x << " " << r.y << " " << r.w << " " << r.h;
+	return os;
+}
+
+std::ostream& operator<<(std::ostream& os, SDL_Rect r)
+{
+	os << r;
+	return os;
+}
+
 SDL_Texture* renderText(SDL_Texture* previousTexture, TTF_Font* font, SDL_Renderer* renderer, const std::string& text, SDL_Color color)
 {
 	if (previousTexture) {
@@ -168,6 +180,35 @@ struct Message {
 	SDL_FRect r{};
 };
 
+float getValueFromValueAndPercent(float value, float percent)
+{
+	return value * percent / 100.f;
+}
+
+enum MsSelectedWidget {
+	Name,
+	Surname,
+	Topic,
+	Content,
+
+	Count, // WARNING: Keep it last
+};
+
+void inputHandleEvent(SDL_Event event, Text& inputText, SDL_Renderer* renderer, TTF_Font* font)
+{
+	if (event.type == SDL_KEYDOWN) {
+		if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+			if (!inputText.text.empty()) {
+				inputText.text.pop_back();
+				inputText.setText(renderer, font, inputText.text, { 0,0,0,0 });
+			}
+		}
+	}
+	if (event.type == SDL_TEXTINPUT) {
+		inputText.setText(renderer, font, inputText.text + event.text.text, { 0,0,0,0 });
+	}
+}
+
 int main(int argc, char* argv[])
 {
 	std::srand(std::time(0));
@@ -230,7 +271,7 @@ int main(int argc, char* argv[])
 #if 1 // NOTE: MessageList
 	std::vector<Message> messages;
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
-	SDL_Rect sendBtnR;
+	SDL_FRect sendBtnR;
 	sendBtnR.w = 128;
 	sendBtnR.h = 128;
 	sendBtnR.x = 0;
@@ -243,12 +284,55 @@ int main(int argc, char* argv[])
 	closeBtnR.h = 64;
 	closeBtnR.x = 0;
 	closeBtnR.y = 0;
+	Text topicText; // TODO: Do something when it goes out of right window border
+	topicText.setText(renderer, robotoF, "");
+	topicText.dstR = closeBtnR;
+	topicText.dstR.x = closeBtnR.x + closeBtnR.w;
+	topicText.autoAdjustW = true;
+	Text contentText; // TODO: Is sould go to next row when it gets out of right window border
+	contentText.setText(renderer, robotoF, "");
+	contentText.dstR = closeBtnR;
+	contentText.dstR.y = closeBtnR.y + closeBtnR.h;
+	contentText.autoAdjustW = true;
 #endif
 #if 1 // NOTE: MessageSend
-	Text topicInputText;
-	topicInputText.setText(renderer, robotoF, "");
-	topicInputText.dstR = nameR;
-	topicInputText.autoAdjustW = true;
+	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
+	SDL_FRect msNameR;
+	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 100.f / 3.f);
+	msNameR.h = closeBtnR.h;
+	msNameR.x = closeBtnR.x + closeBtnR.w;
+	msNameR.y = closeBtnR.y;
+	Text msNameInputText;
+	msNameInputText.setText(renderer, robotoF, "");
+	msNameInputText.dstR = msNameR;
+	msNameInputText.autoAdjustW = true;
+	SDL_FRect msSurnameR = msNameR;
+	msSurnameR.x = msNameR.x + msNameR.w;
+	Text msSurnameInputText;
+	msSurnameInputText.setText(renderer, robotoF, "");
+	msSurnameInputText.dstR = msSurnameR;
+	msSurnameInputText.autoAdjustW = true;
+	SDL_FRect msTopicR = msSurnameR;
+	msTopicR.x = msSurnameR.x + msSurnameR.w;
+	Text msTopicInputText;
+	msTopicInputText.setText(renderer, robotoF, "");
+	msTopicInputText.dstR = msTopicR;
+	msTopicInputText.autoAdjustW = true;
+	SDL_FRect msContentR;
+	msContentR.w = windowWidth;
+	msContentR.h = windowHeight - closeBtnR.h;
+	msContentR.x = 0;
+	msContentR.y = closeBtnR.y + closeBtnR.h;
+	Text msContentInputText;
+	msContentInputText.setText(renderer, robotoF, "");
+	msContentInputText.dstR = closeBtnR;
+	msContentInputText.dstR.y = closeBtnR.y + closeBtnR.h;
+	msContentInputText.autoAdjustW = true;
+	SDL_FRect msSendBtnR;
+	msSendBtnR.w = 200;
+	msSendBtnR.h = 100;
+	msSendBtnR.x = 0;
+	msSendBtnR.y = windowHeight - msSendBtnR.h;
 	// TODO: Content input text which will accept \t \n
 #endif
 	int messageIndexToShow = -1;
@@ -356,6 +440,9 @@ int main(int argc, char* argv[])
 							break;
 						}
 					}
+					if (SDL_PointInFRect(&mousePos, &sendBtnR)) {
+						state = State::MessageSend;
+					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
@@ -373,11 +460,7 @@ int main(int argc, char* argv[])
 			// TODO: Do this from time to time + do so that it won't block UI
 			messages.clear();
 			std::stringstream ss;
-#if 0 // TODO: Enable on release
 			ss << "name=" << nameInputText.text << "&surname=" << surnameInputText.text;
-#else
-			ss << "name=" << "Bar" << "&surname=" << "Foo";
-#endif
 			sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
 			sf::Http http("http://senderprogram.000webhostapp.com/");
 			sf::Http::Response response = http.sendRequest(request);
@@ -441,6 +524,7 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
+			// TODO: Handle errors? E.g. no internet connection.
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 			// TODO: Add scroll when messages enter send button?
@@ -454,7 +538,7 @@ int main(int argc, char* argv[])
 				messages[i].senderSurnameText.draw(renderer);
 				messages[i].dateText.draw(renderer);
 			}
-			SDL_RenderCopy(renderer, sendT, 0, &sendBtnR);
+			SDL_RenderCopyF(renderer, sendT, 0, &sendBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageContent) {
@@ -491,15 +575,33 @@ int main(int argc, char* argv[])
 					realMousePos.y = event.motion.y;
 				}
 			}
+			topicText.setText(renderer, robotoF, messages[messageIndexToShow].topicText.text);
+			topicText.dstR.x = closeBtnR.x + closeBtnR.w + (windowWidth - closeBtnR.w) / 2 - topicText.dstR.w / 2;
+			topicText.dstR.y = closeBtnR.h / 2 - topicText.dstR.h / 2;
+			contentText.setText(renderer, robotoF, messages[messageIndexToShow].contentText.text);
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
-			messages[messageIndexToShow].contentText.draw(renderer); // TODO: It should be wrapped when it goes out of border
+			topicText.draw(renderer);
+			contentText.draw(renderer);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageSend) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
+				if (msSelectedWidget == MsSelectedWidget::Name) {
+					inputHandleEvent(event, msNameInputText, renderer, robotoF);
+				}
+				else if (msSelectedWidget == MsSelectedWidget::Surname) {
+					inputHandleEvent(event, msSurnameInputText, renderer, robotoF);
+				}
+				else if (msSelectedWidget == MsSelectedWidget::Topic) {
+					inputHandleEvent(event, msTopicInputText, renderer, robotoF);
+				}
+				else if (msSelectedWidget == MsSelectedWidget::Content) {
+					inputHandleEvent(event, msContentInputText, renderer, robotoF);
+				}
+
 				if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
 					running = false;
 					// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -509,6 +611,12 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_KEYDOWN) {
 					keys[event.key.keysym.scancode] = true;
+					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
+						msSelectedWidget = (MsSelectedWidget)((int)msSelectedWidget + 1);
+						if (msSelectedWidget >= MsSelectedWidget::Count) {
+							msSelectedWidget = (MsSelectedWidget)0;
+						}
+					}
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
@@ -517,6 +625,26 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
 						state = State::MessageList;
+					}
+					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
+						// TODO: Use more secure HTTP(s) -> curl
+						// TODO: Do it on second thread (to don't block GUI) ???
+						std::stringstream ss;
+						ss
+							<< "receiverName=" << msNameInputText.text
+							<< "&receiverSurname=" << msSurnameInputText.text
+							<< "&topic=" << msTopicInputText.text
+							<< "&content=" << msContentInputText.text
+							<< "&senderName=" << nameInputText.text
+							<< "&senderSurname=" << surnameInputText.text;
+						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());	
+						sf::Http http("http://senderprogram.000webhostapp.com/");
+						sf::Http::Response response = http.sendRequest(request);
+						// TODO: Handle errors? E.g. no internet connection.
+						msNameInputText.setText(renderer, robotoF, "");
+						msSurnameInputText.setText(renderer, robotoF, "");
+						msTopicInputText.setText(renderer, robotoF, "");
+						msContentInputText.setText(renderer, robotoF, "");
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -533,9 +661,30 @@ int main(int argc, char* argv[])
 			}
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+			SDL_RenderFillRectF(renderer, &msNameR);
+			SDL_RenderFillRectF(renderer, &msSurnameR);
+			SDL_RenderFillRectF(renderer, &msTopicR);
+			SDL_RenderFillRectF(renderer, &msContentR);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
-			messages[messageIndexToShow].contentText.draw(renderer); // TODO: It should be wrapped when it goes out of border
-			topicInputText.draw(renderer);
+			msNameInputText.draw(renderer);
+			msSurnameInputText.draw(renderer);
+			msTopicInputText.draw(renderer);
+			msContentInputText.draw(renderer);
+			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
+			if (msSelectedWidget == MsSelectedWidget::Name) {
+				SDL_RenderDrawRectF(renderer, &msNameR);
+			}
+			else if (msSelectedWidget == MsSelectedWidget::Surname) {
+				SDL_RenderDrawRectF(renderer, &msSurnameR);
+			}
+			else if (msSelectedWidget == MsSelectedWidget::Topic) {
+				SDL_RenderDrawRectF(renderer, &msTopicR);
+			}
+			else if (msSelectedWidget == MsSelectedWidget::Content) {
+				SDL_RenderDrawRectF(renderer, &msContentR);
+			}
+			SDL_RenderCopyF(renderer, sendT, 0, &msSendBtnR);
 			SDL_RenderPresent(renderer);
 		}
 	}

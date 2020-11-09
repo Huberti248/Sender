@@ -17,18 +17,34 @@
         if ($rows == 0) {
             mysqli_query($connection, "INSERT INTO `persons` (`id`, `name`, `surname`) VALUES (NULL, '{$_POST['name']}', '{$_POST['surname']}');");
         }
-        $messages = mysqli_query($connection, "
-        SELECT messages.topic,(SELECT persons.name FROM persons WHERE persons.id=messages.senderId) AS name,(SELECT persons.surname FROM persons WHERE persons.id=messages.senderId) AS surname,messages.date,messages.content
+        $messages = mysqli_query($connection, "SELECT messages.topic,(SELECT persons.name FROM persons WHERE persons.id=messages.senderId) AS name,(SELECT persons.surname FROM persons WHERE persons.id=messages.senderId) AS surname,messages.dateTime,messages.content
         FROM messages
         WHERE messages.receiverId=(
              SELECT persons.id
              FROM persons
-              WHERE persons.name='Bar' AND persons.surname='Foo')");
+              WHERE persons.name='{$_POST['name']}' AND persons.surname='{$_POST['surname']}')");
         echo "\035";
         while ($row = $messages->fetch_assoc()) {
-            echo $row['topic'], "\037", $row['name'], "\037", $row['surname'], "\037", $row['date'], "\037", $row['content'], "\036";
+            echo $row['topic'], "\037", $row['name'], "\037", $row['surname'], "\037", $row['dateTime'], "\037", $row['content'], "\036";
         }
         echo "\035";
+    }
+    if (
+        isset($_POST["receiverName"]) &&
+        isset($_POST["receiverSurname"]) &&
+        isset($_POST["topic"]) &&
+        isset($_POST["content"]) &&
+        isset($_POST["senderName"]) &&
+        isset($_POST["senderSurname"])
+    ) {
+        // TODO: In NOW() function the value is expressed in the session time zone. What does it mean and is it going to be 1 hour to early in Poland? Is it connected with Windows region settings?
+        mysqli_query($connection, "INSERT INTO `messages` (`id`, `receiverId`, `senderId`, `dateTime`, `topic`, `content`) 
+        VALUES (NULL, (SELECT persons.id 
+                       FROM persons 
+                       WHERE persons.name='{$_POST['receiverName']}' AND persons.surname='{$_POST['receiverSurname']}'), (SELECT persons.id 
+                       FROM persons 
+                       WHERE persons.name='{$_POST['senderName']}' AND persons.surname='{$_POST['senderSurname']}'), NOW(), '{$_POST['topic']}', '{$_POST['content']}');
+        ");
     }
     ?>
     Hello, World!
