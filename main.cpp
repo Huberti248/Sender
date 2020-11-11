@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -55,6 +55,9 @@ SDL_Point realMousePos;
 bool keys[SDL_NUM_SCANCODES];
 bool buttons[SDL_BUTTON_X2 + 1];
 
+#define BG_COLOR 0,0,0,0
+#define TEXT_COLOR 0,0,0,0
+
 void logOutputCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
 {
 	std::cout << message << std::endl;
@@ -92,7 +95,12 @@ std::ostream& operator<<(std::ostream& os, SDL_FRect r)
 
 std::ostream& operator<<(std::ostream& os, SDL_Rect r)
 {
-	os << r;
+	SDL_FRect fR;
+	fR.w = r.w;
+	fR.h = r.h;
+	fR.x = r.x;
+	fR.y = r.y;
+	os << fR;
 	return os;
 }
 
@@ -140,7 +148,7 @@ struct Text {
 			SDL_QueryTextureF(t, 0, 0, &dstR.w, 0);
 		}
 		if (autoAdjustH) {
-			SDL_QueryTextureF(t, 0, 0, &dstR.h, 0);
+			SDL_QueryTextureF(t, 0, 0, 0, &dstR.h);
 		}
 	}
 
@@ -200,13 +208,29 @@ void inputHandleEvent(SDL_Event event, Text& inputText, SDL_Renderer* renderer, 
 		if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 			if (!inputText.text.empty()) {
 				inputText.text.pop_back();
-				inputText.setText(renderer, font, inputText.text, { 0,0,0,0 });
+				inputText.setText(renderer, font, inputText.text, { TEXT_COLOR });
 			}
 		}
 	}
 	if (event.type == SDL_TEXTINPUT) {
-		inputText.setText(renderer, font, inputText.text + event.text.text, { 0,0,0,0 });
+		inputText.setText(renderer, font, inputText.text + event.text.text, { TEXT_COLOR });
 	}
+}
+
+void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* font)
+{
+	std::string currentText = text.text;
+	while (text.dstR.x + text.dstR.w > r.x + r.w) {
+		if (text.text.empty()) {
+			break;
+		}
+		else {
+			text.text.erase(0, 1);
+			text.setText(renderer, font, text.text, { TEXT_COLOR });
+		}
+	}
+	text.draw(renderer);
+	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
 int main(int argc, char* argv[])
@@ -217,8 +241,8 @@ int main(int argc, char* argv[])
 	SDL_Init(SDL_INIT_EVERYTHING);
 	TTF_Init();
 	SDL_GetMouseState(&mousePos.x, &mousePos.y);
-#if 0 // TODO: Remember to turn it off on reelase
-	SDL_Window * window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE);
+#if 1 // TODO: Remember to turn it off on reelase
+	SDL_Window * window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
 	SDL_DisplayMode dm;
 	SDL_GetCurrentDisplayMode(0, &dm);
 	windowWidth = dm.w;
@@ -240,7 +264,7 @@ int main(int argc, char* argv[])
 	State state = State::LoginAndRegister;
 #if 1 // NOTE: LoginAndRegister
 	Text nameText;
-	nameText.setText(renderer, robotoF, "Imie");
+	nameText.setText(renderer, robotoF, u8"Imię");
 	nameText.dstR.w = 50;
 	nameText.dstR.h = 20;
 	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
@@ -356,13 +380,13 @@ int main(int argc, char* argv[])
 						if (isNameSelected) {
 							if (!nameInputText.text.empty()) {
 								nameInputText.text.pop_back();
-								nameInputText.setText(renderer, robotoF, nameInputText.text, { 0,0,0,0 });
+								nameInputText.setText(renderer, robotoF, nameInputText.text, { TEXT_COLOR });
 							}
 						}
 						else {
 							if (!surnameInputText.text.empty()) {
 								surnameInputText.text.pop_back();
-								surnameInputText.setText(renderer, robotoF, surnameInputText.text, { 0,0,0,0 });
+								surnameInputText.setText(renderer, robotoF, surnameInputText.text, { TEXT_COLOR });
 							}
 						}
 					}
@@ -388,16 +412,15 @@ int main(int argc, char* argv[])
 					realMousePos.y = event.motion.y;
 				}
 				if (event.type == SDL_TEXTINPUT) {
-					// TODO: When text is out of right border 'wrap' it (don't display it's left text part so that it will be in right border still)
 					if (isNameSelected) {
-						nameInputText.setText(renderer, robotoF, nameInputText.text + event.text.text, { 0,0,0,0 });
+						nameInputText.setText(renderer, robotoF, nameInputText.text + event.text.text, { TEXT_COLOR });
 					}
 					else {
-						surnameInputText.setText(renderer, robotoF, surnameInputText.text + event.text.text, { 0,0,0,0 });
+						surnameInputText.setText(renderer, robotoF, surnameInputText.text + event.text.text, { TEXT_COLOR });
 					}
 				}
 			}
-			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_SetRenderDrawColor(renderer, BG_COLOR);
 			SDL_RenderClear(renderer);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 			SDL_RenderFillRectF(renderer, &nameR);
@@ -411,8 +434,8 @@ int main(int argc, char* argv[])
 			}
 			nameText.draw(renderer);
 			surnameText.draw(renderer);
-			nameInputText.draw(renderer);
-			surnameInputText.draw(renderer);
+			drawInBorders(nameInputText, nameR, renderer, robotoF);
+			drawInBorders(surnameInputText, surnameR, renderer, robotoF);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageList) {
@@ -637,7 +660,7 @@ int main(int argc, char* argv[])
 							<< "&content=" << msContentInputText.text
 							<< "&senderName=" << nameInputText.text
 							<< "&senderSurname=" << surnameInputText.text;
-						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());	
+						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
 						sf::Http http("http://senderprogram.000webhostapp.com/");
 						sf::Http::Response response = http.sendRequest(request);
 						// TODO: Handle errors? E.g. no internet connection.
