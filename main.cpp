@@ -35,6 +35,9 @@
 #else
 #include <pugixml.hpp>
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 // NOTE: Remember to uncomment it on every release
 //#define RELEASE
@@ -54,6 +57,7 @@ SDL_Point mousePos;
 SDL_Point realMousePos;
 bool keys[SDL_NUM_SCANCODES];
 bool buttons[SDL_BUTTON_X2 + 1];
+SDL_Renderer* renderer;
 
 #define BG_COLOR 0,0,0,0
 #define TEXT_COLOR 0,0,0,0
@@ -104,52 +108,104 @@ std::ostream& operator<<(std::ostream& os, SDL_Rect r)
 	return os;
 }
 
-SDL_Texture* renderText(SDL_Texture* previousTexture, TTF_Font* font, SDL_Renderer* renderer, const std::string& text, SDL_Color color)
-{
-	if (previousTexture) {
-		SDL_DestroyTexture(previousTexture);
-	}
-	SDL_Surface* surface;
-	if (text.empty()) {
-		surface = TTF_RenderUTF8_Blended(font, " ", color);
-	}
-	else {
-		surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
-	}
-	if (surface) {
-		SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-		SDL_FreeSurface(surface);
-		return texture;
-	}
-	else {
-		return 0;
-	}
-}
-
 struct Text {
 	std::string text;
+	SDL_Surface* surface = 0;
 	SDL_Texture* t = 0;
 	SDL_FRect dstR{};
 	bool autoAdjustW = false;
 	bool autoAdjustH = false;
+	float wMultiplier = 1;
+	float hMultiplier = 1;
 
 	~Text()
 	{
+		if (surface) {
+			SDL_FreeSurface(surface);
+		}
 		if (t) {
 			SDL_DestroyTexture(t);
 		}
 	}
 
+	Text()
+	{
+
+	}
+
+	Text(const Text& rightText)
+	{
+		text = rightText.text;
+		if (surface) {
+			SDL_FreeSurface(surface);
+		}
+		if (t) {
+			SDL_DestroyTexture(t);
+		}
+		if (rightText.surface) {
+			surface = SDL_ConvertSurface(rightText.surface, rightText.surface->format, SDL_SWSURFACE);
+		}
+		if (rightText.t) {
+			t = SDL_CreateTextureFromSurface(renderer, surface);
+		}
+		dstR = rightText.dstR;
+		autoAdjustW = rightText.autoAdjustW;
+		autoAdjustH = rightText.autoAdjustH;
+		wMultiplier = rightText.wMultiplier;
+		hMultiplier = rightText.hMultiplier;
+	}
+
+	Text& operator=(const Text& rightText)
+	{
+		text = rightText.text;
+		if (surface) {
+			SDL_FreeSurface(surface);
+		}
+		if (t) {
+			SDL_DestroyTexture(t);
+		}
+		if (rightText.surface) {
+			surface = SDL_ConvertSurface(rightText.surface, rightText.surface->format, SDL_SWSURFACE);
+		}
+		if (rightText.t) {
+			t = SDL_CreateTextureFromSurface(renderer, surface);
+		}
+		dstR = rightText.dstR;
+		autoAdjustW = rightText.autoAdjustW;
+		autoAdjustH = rightText.autoAdjustH;
+		wMultiplier = rightText.wMultiplier;
+		hMultiplier = rightText.hMultiplier;
+		return *this;
+	}
+
 	void setText(SDL_Renderer* renderer, TTF_Font* font, std::string text, SDL_Color c = { 255,255,255 })
 	{
 		this->text = text;
-		t = renderText(t, font, renderer, text, c);
+#if 1 // NOTE: renderText
+		if (surface) {
+			SDL_FreeSurface(surface);
+		}
+		if (t) {
+			SDL_DestroyTexture(t);
+		}
+		if (text.empty()) {
+			surface = TTF_RenderUTF8_Blended(font, " ", c);
+		}
+		else {
+			surface = TTF_RenderUTF8_Blended(font, text.c_str(), c);
+		}
+		if (surface) {
+			t = SDL_CreateTextureFromSurface(renderer, surface);
+		}
+#endif
 		if (autoAdjustW) {
 			SDL_QueryTextureF(t, 0, 0, &dstR.w, 0);
 		}
 		if (autoAdjustH) {
 			SDL_QueryTextureF(t, 0, 0, 0, &dstR.h);
 		}
+		dstR.w *= wMultiplier;
+		dstR.h *= hMultiplier;
 	}
 
 	void setText(SDL_Renderer* renderer, TTF_Font* font, int value, SDL_Color c = { 255,255,255 })
@@ -170,6 +226,80 @@ int eventWatch(void* userdata, SDL_Event* event)
 
 	}
 	return 0;
+}
+
+std::string getSystemFontFile(const std::string& faceName)
+{
+#ifdef _WIN32
+	static const LPWSTR fontRegistryPath = L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
+	HKEY hKey;
+	LONG result;
+	std::wstring wsFaceName(faceName.begin(), faceName.end());
+
+	// Open Windows font registry key
+	result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, fontRegistryPath, 0, KEY_READ, &hKey);
+	if (result != ERROR_SUCCESS) {
+		return "";
+	}
+
+	DWORD maxValueNameSize, maxValueDataSize;
+	result = RegQueryInfoKey(hKey, 0, 0, 0, 0, 0, 0, 0, &maxValueNameSize, &maxValueDataSize, 0, 0);
+	if (result != ERROR_SUCCESS) {
+		return "";
+	}
+
+	DWORD valueIndex = 0;
+	LPWSTR valueName = new WCHAR[maxValueNameSize];
+	LPBYTE valueData = new BYTE[maxValueDataSize];
+	DWORD valueNameSize, valueDataSize, valueType;
+	std::wstring wsFontFile;
+
+	// Look for a matching font name
+	do {
+
+		wsFontFile.clear();
+		valueDataSize = maxValueDataSize;
+		valueNameSize = maxValueNameSize;
+
+		result = RegEnumValue(hKey, valueIndex, valueName, &valueNameSize, 0, &valueType, valueData, &valueDataSize);
+
+		valueIndex++;
+
+		if (result != ERROR_SUCCESS || valueType != REG_SZ) {
+			continue;
+		}
+
+		std::wstring wsValueName(valueName, valueNameSize);
+
+		// Found a match
+		if (_wcsnicmp(wsFaceName.c_str(), wsValueName.c_str(), wsFaceName.length()) == 0) {
+
+			wsFontFile.assign((LPWSTR)valueData, valueDataSize);
+			break;
+		}
+	} while (result != ERROR_NO_MORE_ITEMS);
+
+	delete[] valueName;
+	delete[] valueData;
+
+	RegCloseKey(hKey);
+
+	if (wsFontFile.empty()) {
+		return "";
+	}
+
+	// Build full font file path
+	WCHAR winDir[MAX_PATH];
+	GetWindowsDirectory(winDir, MAX_PATH);
+
+	std::wstringstream ss;
+	ss << winDir << "\\Fonts\\" << wsFontFile;
+	wsFontFile = ss.str();
+
+	return std::string(wsFontFile.begin(), wsFontFile.end());
+#else
+	return faceName;
+#endif
 }
 
 enum class State {
@@ -233,6 +363,30 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
+void sendMessage(Text& msNameInputText, Text& msSurnameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText, Text& surnameInputText,
+	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font)
+{
+	// TODO: Use more secure HTTP(s) -> curl
+	// TODO: Do it on second thread (to don't block GUI) ???
+	std::stringstream ss;
+	ss
+		<< "receiverName=" << msNameInputText.text
+		<< "&receiverSurname=" << msSurnameInputText.text
+		<< "&topic=" << msTopicInputText.text
+		<< "&content=" << msContentInputText.text
+		<< "&senderName=" << nameInputText.text
+		<< "&senderSurname=" << surnameInputText.text;
+	sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
+	sf::Http http("http://senderprogram.000webhostapp.com/");
+	sf::Http::Response response = http.sendRequest(request);
+	// TODO: Handle errors? E.g. no internet connection.
+	msNameInputText.setText(renderer, font, "");
+	msSurnameInputText.setText(renderer, font, "");
+	msTopicInputText.setText(renderer, font, "");
+	msContentInputText.setText(renderer, font, "");
+	msSelectedWidget = MsSelectedWidget::Name;
+}
+
 int main(int argc, char* argv[])
 {
 	std::srand(std::time(0));
@@ -254,7 +408,7 @@ int main(int argc, char* argv[])
 	windowWidth = dm.w;
 	windowHeight = dm.h;
 #endif
-	SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 	TTF_Font* robotoF = TTF_OpenFont("res/roboto.ttf", 72);
 	int w, h;
 	SDL_GetWindowSize(window, &w, &h);
@@ -265,7 +419,7 @@ int main(int argc, char* argv[])
 #if 1 // NOTE: LoginAndRegister
 	Text nameText;
 	nameText.setText(renderer, robotoF, u8"Imię");
-	nameText.dstR.w = 50;
+	nameText.dstR.w = 40;
 	nameText.dstR.h = 20;
 	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
 	nameText.dstR.y = 300;
@@ -277,10 +431,12 @@ int main(int argc, char* argv[])
 	Text nameInputText;
 	nameInputText.setText(renderer, robotoF, "");
 	nameInputText.dstR = nameR;
+	nameInputText.dstR.x += 3;
 	nameInputText.autoAdjustW = true;
+	nameInputText.wMultiplier = 0.5;
 	Text surnameText;
 	surnameText.setText(renderer, robotoF, "Nazwisko");
-	surnameText.dstR.w = 100;
+	surnameText.dstR.w = 80;
 	surnameText.dstR.h = 20;
 	surnameText.dstR.x = windowWidth / 2 - surnameText.dstR.w / 2;
 	surnameText.dstR.y = nameR.y + nameR.h + 15;
@@ -289,17 +445,19 @@ int main(int argc, char* argv[])
 	Text surnameInputText;
 	surnameInputText.setText(renderer, robotoF, "");
 	surnameInputText.dstR = surnameR;
+	surnameInputText.dstR.x += 3;
 	surnameInputText.autoAdjustW = true;
+	surnameInputText.wMultiplier = 0.5;
 	bool isNameSelected = true;
 #endif
 #if 1 // NOTE: MessageList
 	std::vector<Message> messages;
-	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
-	SDL_FRect sendBtnR;
-	sendBtnR.w = 128;
-	sendBtnR.h = 128;
-	sendBtnR.x = 0;
-	sendBtnR.y = windowHeight - sendBtnR.h;
+	SDL_Texture* writeMessageT = IMG_LoadTexture(renderer, "res/writeMessage.png");
+	SDL_FRect writeMessageBtnR;
+	writeMessageBtnR.w = 256;
+	writeMessageBtnR.h = 64;
+	writeMessageBtnR.x = 5;
+	writeMessageBtnR.y = windowHeight - writeMessageBtnR.h - 5;
 #endif
 #if 1 // NOTE: MessageContent
 	SDL_Texture * closeT = IMG_LoadTexture(renderer, "res/close.png");
@@ -329,18 +487,21 @@ int main(int argc, char* argv[])
 	Text msNameInputText;
 	msNameInputText.setText(renderer, robotoF, "");
 	msNameInputText.dstR = msNameR;
+	msNameInputText.dstR.x += 3;
 	msNameInputText.autoAdjustW = true;
 	SDL_FRect msSurnameR = msNameR;
 	msSurnameR.x = msNameR.x + msNameR.w;
 	Text msSurnameInputText;
 	msSurnameInputText.setText(renderer, robotoF, "");
 	msSurnameInputText.dstR = msSurnameR;
+	msSurnameInputText.dstR.x += 3;
 	msSurnameInputText.autoAdjustW = true;
 	SDL_FRect msTopicR = msSurnameR;
 	msTopicR.x = msSurnameR.x + msSurnameR.w;
 	Text msTopicInputText;
 	msTopicInputText.setText(renderer, robotoF, "");
 	msTopicInputText.dstR = msTopicR;
+	msTopicInputText.dstR.x += 3;
 	msTopicInputText.autoAdjustW = true;
 	SDL_FRect msContentR;
 	msContentR.w = windowWidth;
@@ -350,13 +511,15 @@ int main(int argc, char* argv[])
 	Text msContentInputText;
 	msContentInputText.setText(renderer, robotoF, "");
 	msContentInputText.dstR = closeBtnR;
+	msContentInputText.dstR.x += 3;
 	msContentInputText.dstR.y = closeBtnR.y + closeBtnR.h;
 	msContentInputText.autoAdjustW = true;
+	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
 	SDL_FRect msSendBtnR;
-	msSendBtnR.w = 200;
-	msSendBtnR.h = 100;
-	msSendBtnR.x = 0;
-	msSendBtnR.y = windowHeight - msSendBtnR.h;
+	msSendBtnR.w = 256;
+	msSendBtnR.h = 64;
+	msSendBtnR.x = 5;
+	msSendBtnR.y = windowHeight - msSendBtnR.h - 5;
 	// TODO: Content input text which will accept \t \n
 #endif
 	int messageIndexToShow = -1;
@@ -463,7 +626,7 @@ int main(int argc, char* argv[])
 							break;
 						}
 					}
-					if (SDL_PointInFRect(&mousePos, &sendBtnR)) {
+					if (SDL_PointInFRect(&mousePos, &writeMessageBtnR)) {
 						state = State::MessageSend;
 					}
 				}
@@ -478,10 +641,47 @@ int main(int argc, char* argv[])
 					realMousePos.x = event.motion.x;
 					realMousePos.y = event.motion.y;
 				}
+				if (event.type == SDL_MOUSEWHEEL) {
+					if (event.wheel.y > 0) // scroll up
+					{
+						if (!messages.empty()) {
+							float minY = messages.front().r.y;
+							for (int i = 1; i < messages.size(); ++i) {
+								minY = std::min(minY, messages[i].r.y);
+							}
+							if (minY < 0) {
+								for (Message& message : messages) {
+									message.r.y += windowHeight;
+									message.topicText.dstR.y += windowHeight;
+									message.senderNameText.dstR.y += windowHeight;
+									message.senderSurnameText.dstR.y += windowHeight;
+									message.dateText.dstR.y += windowHeight;
+								}
+							}
+						}
+					}
+					else if (event.wheel.y < 0) // scroll down
+					{
+						if (!messages.empty()) {
+							float maxY = messages.front().r.y;
+							for (int i = 1; i < messages.size(); ++i) {
+								maxY = std::max(maxY, messages[i].r.y);
+							}
+							if (maxY >= windowHeight) {
+								for (Message& message : messages) {
+									message.r.y -= windowHeight;
+									message.topicText.dstR.y -= windowHeight;
+									message.senderNameText.dstR.y -= windowHeight;
+									message.senderSurnameText.dstR.y -= windowHeight;
+									message.dateText.dstR.y -= windowHeight;
+								}
+							}
+						}
+					}
+				}
 			}
 			// TODO: Use more secure HTTP(s) -> curl
 			// TODO: Do this from time to time + do so that it won't block UI
-			messages.clear();
 			std::stringstream ss;
 			ss << "name=" << nameInputText.text << "&surname=" << surnameInputText.text;
 			sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
@@ -503,46 +703,68 @@ int main(int argc, char* argv[])
 				}
 				{
 					std::stringstream ss(body);
+					std::vector<Message> newMessages;
 					std::string message;
 					{
 						int i = 0;
 						while (std::getline(ss, message, '\036')) {
 							std::stringstream ss(message);
-							messages.push_back(Message());
-							std::getline(ss, messages.back().topicText.text, '\037');
-							std::getline(ss, messages.back().senderNameText.text, '\037');
-							std::getline(ss, messages.back().senderSurnameText.text, '\037');
-							std::getline(ss, messages.back().dateText.text, '\037');
-							std::getline(ss, messages.back().contentText.text, '\037');
-							messages.back().r.w = windowWidth;
-							messages.back().r.h = 20;
-							messages.back().r.x = 0;
-							messages.back().r.y = messages.back().r.h * i;
-							messages.back().topicText.dstR = messages.back().r;
-							messages.back().topicText.autoAdjustW = true;
-							messages.back().topicText.setText(renderer, robotoF, messages.back().topicText.text);
-							messages.back().topicText.dstR.w *= 0.3;
-							messages.back().senderNameText.dstR = messages.back().r;
-							messages.back().senderNameText.dstR.x = messages.back().topicText.dstR.x + messages.back().topicText.dstR.w + 10;
-							messages.back().senderNameText.autoAdjustW = true;
-							messages.back().senderNameText.setText(renderer, robotoF, messages.back().senderNameText.text);
-							messages.back().senderNameText.dstR.w *= 0.3;
-							messages.back().senderSurnameText.dstR = messages.back().r;
-							messages.back().senderSurnameText.dstR.x = messages.back().senderNameText.dstR.x + messages.back().senderNameText.dstR.w + 10;
-							messages.back().senderSurnameText.autoAdjustW = true;
-							messages.back().senderSurnameText.setText(renderer, robotoF, messages.back().senderSurnameText.text);
-							messages.back().senderSurnameText.dstR.w *= 0.3;
-							messages.back().dateText.dstR = messages.back().r;
-							messages.back().dateText.dstR.x = messages.back().senderSurnameText.dstR.x + messages.back().senderSurnameText.dstR.w + 10;
-							messages.back().dateText.autoAdjustW = true;
-							messages.back().dateText.setText(renderer, robotoF, messages.back().dateText.text);
-							messages.back().dateText.dstR.w *= 0.3;
-							messages.back().contentText.dstR = messages.back().topicText.dstR;
-							messages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
-							messages.back().contentText.autoAdjustW = true;
-							messages.back().contentText.setText(renderer, robotoF, messages.back().contentText.text);
-							messages.back().contentText.dstR.w *= 0.3;
+							newMessages.push_back(Message());
+							std::getline(ss, newMessages.back().topicText.text, '\037');
+							std::getline(ss, newMessages.back().senderNameText.text, '\037');
+							std::getline(ss, newMessages.back().senderSurnameText.text, '\037');
+							std::getline(ss, newMessages.back().dateText.text, '\037');
+							std::getline(ss, newMessages.back().contentText.text, '\037');
+
+							newMessages.back().r.w = windowWidth;
+							newMessages.back().r.h = 20;
+							newMessages.back().r.x = 0;
+							newMessages.back().r.y = newMessages.back().r.h * i;
+
+							newMessages.back().topicText.dstR = newMessages.back().r;
+							newMessages.back().topicText.autoAdjustW = true;
+							newMessages.back().topicText.setText(renderer, robotoF, newMessages.back().topicText.text);
+							newMessages.back().topicText.dstR.w *= 0.3;
+
+							newMessages.back().dateText.dstR = newMessages.back().r;
+							newMessages.back().dateText.autoAdjustW = true;
+							newMessages.back().dateText.setText(renderer, robotoF, newMessages.back().dateText.text);
+							newMessages.back().dateText.dstR.w *= 0.3;
+							newMessages.back().dateText.dstR.x = windowWidth - newMessages.back().dateText.dstR.w - 3;
+
+							newMessages.back().senderSurnameText.dstR = newMessages.back().r;
+							newMessages.back().senderSurnameText.autoAdjustW = true;
+							newMessages.back().senderSurnameText.setText(renderer, robotoF, newMessages.back().senderSurnameText.text);
+							newMessages.back().senderSurnameText.dstR.w *= 0.3;
+							newMessages.back().senderSurnameText.dstR.x = newMessages.back().dateText.dstR.x - newMessages.back().senderSurnameText.dstR.w - 10;
+
+							newMessages.back().senderNameText.dstR = newMessages.back().r;
+							newMessages.back().senderNameText.autoAdjustW = true;
+							newMessages.back().senderNameText.setText(renderer, robotoF, newMessages.back().senderNameText.text);
+							newMessages.back().senderNameText.dstR.w *= 0.3;
+							newMessages.back().senderNameText.dstR.x = newMessages.back().senderSurnameText.dstR.x - newMessages.back().senderNameText.dstR.w - 10;
+
+							newMessages.back().contentText.dstR = newMessages.back().topicText.dstR;
+							newMessages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
+							newMessages.back().contentText.autoAdjustW = true;
+							newMessages.back().contentText.setText(renderer, robotoF, newMessages.back().contentText.text);
+							newMessages.back().contentText.dstR.w *= 0.3;
 							++i;
+						}
+					}
+					if (messages.size() != newMessages.size()) {
+						messages = newMessages;
+					}
+					else {
+						for (int i = 0; i < messages.size(); ++i) {
+							if (messages[i].topicText.text != newMessages[i].topicText.text ||
+								messages[i].senderNameText.text != newMessages[i].senderNameText.text ||
+								messages[i].senderSurnameText.text != newMessages[i].senderSurnameText.text ||
+								messages[i].dateText.text != newMessages[i].dateText.text ||
+								messages[i].contentText.text != newMessages[i].contentText.text) {
+								messages = newMessages;
+								break;
+							}
 						}
 					}
 				}
@@ -561,7 +783,7 @@ int main(int argc, char* argv[])
 				messages[i].senderSurnameText.draw(renderer);
 				messages[i].dateText.draw(renderer);
 			}
-			SDL_RenderCopyF(renderer, sendT, 0, &sendBtnR);
+			SDL_RenderCopyF(renderer, writeMessageT, 0, &writeMessageBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageContent) {
@@ -640,6 +862,9 @@ int main(int argc, char* argv[])
 							msSelectedWidget = (MsSelectedWidget)0;
 						}
 					}
+					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
+						sendMessage(msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
+					}
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
@@ -650,24 +875,7 @@ int main(int argc, char* argv[])
 						state = State::MessageList;
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						// TODO: Use more secure HTTP(s) -> curl
-						// TODO: Do it on second thread (to don't block GUI) ???
-						std::stringstream ss;
-						ss
-							<< "receiverName=" << msNameInputText.text
-							<< "&receiverSurname=" << msSurnameInputText.text
-							<< "&topic=" << msTopicInputText.text
-							<< "&content=" << msContentInputText.text
-							<< "&senderName=" << nameInputText.text
-							<< "&senderSurname=" << surnameInputText.text;
-						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
-						sf::Http http("http://senderprogram.000webhostapp.com/");
-						sf::Http::Response response = http.sendRequest(request);
-						// TODO: Handle errors? E.g. no internet connection.
-						msNameInputText.setText(renderer, robotoF, "");
-						msSurnameInputText.setText(renderer, robotoF, "");
-						msTopicInputText.setText(renderer, robotoF, "");
-						msContentInputText.setText(renderer, robotoF, "");
+						sendMessage(msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -690,10 +898,10 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRectF(renderer, &msTopicR);
 			SDL_RenderFillRectF(renderer, &msContentR);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
-			msNameInputText.draw(renderer);
-			msSurnameInputText.draw(renderer);
-			msTopicInputText.draw(renderer);
-			msContentInputText.draw(renderer);
+			drawInBorders(msNameInputText, msNameR, renderer, robotoF);
+			drawInBorders(msSurnameInputText, msSurnameR, renderer, robotoF);
+			drawInBorders(msTopicInputText, msTopicR, renderer, robotoF);
+			drawInBorders(msContentInputText, msContentR, renderer, robotoF);
 			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
 			if (msSelectedWidget == MsSelectedWidget::Name) {
 				SDL_RenderDrawRectF(renderer, &msNameR);
