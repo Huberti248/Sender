@@ -332,21 +332,6 @@ enum MsSelectedWidget {
 	Count, // WARNING: Keep it last
 };
 
-void inputHandleEvent(SDL_Event event, Text& inputText, SDL_Renderer* renderer, TTF_Font* font)
-{
-	if (event.type == SDL_KEYDOWN) {
-		if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-			if (!inputText.text.empty()) {
-				inputText.text.pop_back();
-				inputText.setText(renderer, font, inputText.text, { TEXT_COLOR });
-			}
-		}
-	}
-	if (event.type == SDL_TEXTINPUT) {
-		inputText.setText(renderer, font, inputText.text + event.text.text, { TEXT_COLOR });
-	}
-}
-
 void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* font)
 {
 	std::string currentText = text.text;
@@ -386,6 +371,12 @@ void sendMessage(Text& msNameInputText, Text& msSurnameInputText, Text& msTopicI
 	msContentInputText.setText(renderer, font, "");
 	msSelectedWidget = MsSelectedWidget::Name;
 }
+
+enum class Scroll {
+	None,
+	Up,
+	Down,
+};
 
 int main(int argc, char* argv[])
 {
@@ -469,58 +460,105 @@ int main(int argc, char* argv[])
 	Text topicText; // TODO: Do something when it goes out of right window border
 	topicText.setText(renderer, robotoF, "");
 	topicText.dstR = closeBtnR;
+	topicText.dstR.h = 20;
 	topicText.dstR.x = closeBtnR.x + closeBtnR.w;
 	topicText.autoAdjustW = true;
-	Text contentText; // TODO: Is sould go to next row when it gets out of right window border
-	contentText.setText(renderer, robotoF, "");
-	contentText.dstR = closeBtnR;
-	contentText.dstR.y = closeBtnR.y + closeBtnR.h;
-	contentText.autoAdjustW = true;
+	topicText.wMultiplier = 0.3;
+	SDL_FRect contentR;
+	contentR.w = windowWidth;
+	contentR.h = windowHeight - closeBtnR.h;
+	contentR.x = 0;
+	contentR.y = closeBtnR.y + closeBtnR.h;
+	SDL_FRect scrollR;
+	scrollR.w = 20;
+	scrollR.h = contentR.h;
+	scrollR.x = windowWidth - scrollR.w;
+	scrollR.y = contentR.y;
+	contentR.w = windowWidth - scrollR.w;
+	SDL_FRect scrollBtnR;
+	scrollBtnR.w = scrollR.w;
+	scrollBtnR.h = 30;
+	scrollBtnR.x = scrollR.x;
+	scrollBtnR.y = scrollR.y;
+	Scroll scroll = Scroll::None;
+	std::vector<Text> texts;
 #endif
 #if 1 // NOTE: MessageSend
 	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
 	SDL_FRect msNameR;
 	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 100.f / 3.f);
-	msNameR.h = closeBtnR.h;
+	msNameR.h = getValueFromValueAndPercent(closeBtnR.h, 70);
 	msNameR.x = closeBtnR.x + closeBtnR.w;
-	msNameR.y = closeBtnR.y;
+	msNameR.y = 0;
+	Text msNameText;
+	msNameText.setText(renderer, robotoF, u8"Imię", { TEXT_COLOR });
+	msNameText.dstR.w = 40;
+	msNameText.dstR.h = 20;
+	msNameText.dstR.x = msNameR.x + msNameR.w / 2 - msNameText.dstR.w / 2;
+	msNameText.dstR.y = 0;
+	msNameR.y = msNameText.dstR.y + msNameText.dstR.h;
 	Text msNameInputText;
-	msNameInputText.setText(renderer, robotoF, "");
+	msNameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 	msNameInputText.dstR = msNameR;
+	msNameInputText.dstR.h *= 0.5;
 	msNameInputText.dstR.x += 3;
+	msNameInputText.dstR.y = msNameR.y + msNameR.h / 2 - msNameInputText.dstR.h / 2;
 	msNameInputText.autoAdjustW = true;
+	msNameInputText.wMultiplier = 0.3;
 	SDL_FRect msSurnameR = msNameR;
 	msSurnameR.x = msNameR.x + msNameR.w;
 	Text msSurnameInputText;
-	msSurnameInputText.setText(renderer, robotoF, "");
+	msSurnameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 	msSurnameInputText.dstR = msSurnameR;
+	msSurnameInputText.dstR.h *= 0.5;
 	msSurnameInputText.dstR.x += 3;
+	msSurnameInputText.dstR.y = msSurnameR.y + msSurnameR.h / 2 - msSurnameInputText.dstR.h / 2;
 	msSurnameInputText.autoAdjustW = true;
+	msSurnameInputText.wMultiplier = 0.3;
+	Text msSurnameText;
+	msSurnameText.setText(renderer, robotoF, "Nazwisko", { TEXT_COLOR });
+	msSurnameText.dstR.w = 80;
+	msSurnameText.dstR.h = 20;
+	msSurnameText.dstR.x = msSurnameInputText.dstR.x + msSurnameInputText.dstR.w / 2 - msSurnameText.dstR.w / 2;
+	msSurnameText.dstR.y = msNameText.dstR.y;
+	msSurnameText.autoAdjustW = true;
 	SDL_FRect msTopicR = msSurnameR;
 	msTopicR.x = msSurnameR.x + msSurnameR.w;
+	Text msTopicText;
+	msTopicText.setText(renderer, robotoF, "Temat", { TEXT_COLOR });
+	msTopicText.dstR.w = 60;
+	msTopicText.dstR.h = 20;
+	msTopicText.dstR.x = msTopicR.x + msTopicR.w / 2 - msTopicText.dstR.w / 2;
+	msTopicText.dstR.y = msNameText.dstR.y;
+	msTopicText.autoAdjustW = true;
 	Text msTopicInputText;
-	msTopicInputText.setText(renderer, robotoF, "");
+	msTopicInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 	msTopicInputText.dstR = msTopicR;
+	msTopicInputText.dstR.h *= 0.5;
 	msTopicInputText.dstR.x += 3;
+	msTopicInputText.dstR.y = msTopicR.y + msTopicR.h / 2 - msTopicInputText.dstR.h / 2;
 	msTopicInputText.autoAdjustW = true;
+	msTopicInputText.wMultiplier = 0.3;
 	SDL_FRect msContentR;
 	msContentR.w = windowWidth;
 	msContentR.h = windowHeight - closeBtnR.h;
 	msContentR.x = 0;
 	msContentR.y = closeBtnR.y + closeBtnR.h;
 	Text msContentInputText;
-	msContentInputText.setText(renderer, robotoF, "");
+	msContentInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 	msContentInputText.dstR = closeBtnR;
+	msContentInputText.dstR.h = 20;
 	msContentInputText.dstR.x += 3;
 	msContentInputText.dstR.y = closeBtnR.y + closeBtnR.h;
 	msContentInputText.autoAdjustW = true;
+	msContentInputText.wMultiplier = 0.3;
+	bool textInputEventInMsContentInputText = false;
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
 	SDL_FRect msSendBtnR;
 	msSendBtnR.w = 256;
 	msSendBtnR.h = 64;
 	msSendBtnR.x = 5;
 	msSendBtnR.y = windowHeight - msSendBtnR.h - 5;
-	// TODO: Content input text which will accept \t \n
 #endif
 	int messageIndexToShow = -1;
 	while (running) {
@@ -623,6 +661,41 @@ int main(int argc, char* argv[])
 						if (SDL_PointInFRect(&mousePos, &messages[i].r)) {
 							state = State::MessageContent;
 							messageIndexToShow = i;
+							{
+								// TODO: Set width and height of texts in same way as it's in msContentInputText
+								std::stringstream ss(messages[messageIndexToShow].contentText.text);
+								texts.push_back(Text());
+								texts.back() = messages[messageIndexToShow].contentText;
+#if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
+								while (std::getline(ss, texts.back().text, '\n')) {
+									texts.back().autoAdjustW = true;
+									texts.back().wMultiplier = 0.3;
+									texts.back().dstR.h = 20;
+									texts.back().dstR.x = 0;
+									texts.back().dstR.y = closeBtnR.y + closeBtnR.h;
+									texts.back().setText(renderer, robotoF, texts.back().text);
+									texts.push_back(Text());
+									texts.back() = messages[messageIndexToShow].contentText;
+								}
+								texts.pop_back();
+#endif
+								if (!texts.empty()) {
+									for (int i = 1; i < texts.size(); ++i) {
+										texts[i].dstR.y = texts[i - 1].dstR.y + texts[i - 1].dstR.h;
+									}
+									if (scroll == Scroll::Up) {
+										for (Text& text : texts) {
+											text.dstR.y += text.dstR.h;
+										}
+									}
+									else if (scroll == Scroll::Down) {
+										for (Text& text : texts) {
+											text.dstR.y -= text.dstR.h;
+										}
+									}
+									scroll = Scroll::None;
+								}
+							}
 							break;
 						}
 					}
@@ -819,32 +892,123 @@ int main(int argc, char* argv[])
 					realMousePos.x = event.motion.x;
 					realMousePos.y = event.motion.y;
 				}
+				if (event.type == SDL_MOUSEWHEEL) {
+					if (event.wheel.y > 0) // scroll up
+					{
+						scroll = Scroll::Up;
+					}
+					else if (event.wheel.y < 0) // scroll down
+					{
+						scroll = Scroll::Down;
+					}
+				}
 			}
 			topicText.setText(renderer, robotoF, messages[messageIndexToShow].topicText.text);
 			topicText.dstR.x = closeBtnR.x + closeBtnR.w + (windowWidth - closeBtnR.w) / 2 - topicText.dstR.w / 2;
 			topicText.dstR.y = closeBtnR.h / 2 - topicText.dstR.h / 2;
-			contentText.setText(renderer, robotoF, messages[messageIndexToShow].contentText.text);
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
-			topicText.draw(renderer);
-			contentText.draw(renderer);
+			topicText.draw(renderer); 
+			if (!texts.empty()) {
+				if (scroll == Scroll::Up) {
+					if (texts.front().dstR.y != contentR.y) {
+						for (Text& text : texts) {
+							text.dstR.y += text.dstR.h;
+						}
+						float visible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
+						float percent = 100 / (texts.size() - visible);
+						float max = 0 + scrollR.h - scrollBtnR.h;
+						float min = 0;
+						scrollBtnR.y -= (percent * (max - min) / 100) + min;
+					}
+				}
+				else if (scroll == Scroll::Down) {
+					if (texts.back().dstR.y + texts.back().dstR.h > contentR.y + contentR.h) {
+						for (Text& text : texts) {
+							text.dstR.y -= text.dstR.h;
+						}
+						float visible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
+						float percent = 100 / (texts.size() - visible);
+						float max = 0 + scrollR.h - scrollBtnR.h;
+						float min = 0;
+						scrollBtnR.y += (percent * (max - min) / 100) + min;
+					}
+				}
+				scroll = Scroll::None;
+				for (Text& text : texts) {
+					if (text.dstR.y >= contentR.y) {
+						text.draw(renderer);
+					}
+				}
+			}
+			SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
+			SDL_RenderFillRectF(renderer, &scrollR);
+			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
+			SDL_RenderFillRectF(renderer, &scrollBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageSend) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
 				if (msSelectedWidget == MsSelectedWidget::Name) {
-					inputHandleEvent(event, msNameInputText, renderer, robotoF);
+					if (event.type == SDL_TEXTINPUT) {
+						msNameInputText.setText(renderer, robotoF, msNameInputText.text + event.text.text, { TEXT_COLOR });
+					}
+					if (event.type == SDL_KEYDOWN) {
+						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+							if (!msNameInputText.text.empty()) {
+								msNameInputText.text.pop_back();
+								msNameInputText.setText(renderer, robotoF, msNameInputText.text, { TEXT_COLOR });
+							}
+						}
+					}
 				}
 				else if (msSelectedWidget == MsSelectedWidget::Surname) {
-					inputHandleEvent(event, msSurnameInputText, renderer, robotoF);
+					if (event.type == SDL_TEXTINPUT) {
+						msSurnameInputText.setText(renderer, robotoF, msSurnameInputText.text + event.text.text, { TEXT_COLOR });
+					}
+					if (event.type == SDL_KEYDOWN) {
+						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+							if (!msSurnameInputText.text.empty()) {
+								msSurnameInputText.text.pop_back();
+								msSurnameInputText.setText(renderer, robotoF, msSurnameInputText.text, { TEXT_COLOR });
+							}
+						}
+					}
 				}
 				else if (msSelectedWidget == MsSelectedWidget::Topic) {
-					inputHandleEvent(event, msTopicInputText, renderer, robotoF);
+					if (event.type == SDL_TEXTINPUT) {
+						msTopicInputText.setText(renderer, robotoF, msTopicInputText.text + event.text.text, { TEXT_COLOR });
+					}
+					if (event.type == SDL_KEYDOWN) {
+						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+							if (!msTopicInputText.text.empty()) {
+								msTopicInputText.text.pop_back();
+								msTopicInputText.setText(renderer, robotoF, msTopicInputText.text, { TEXT_COLOR });
+							}
+						}
+					}
 				}
 				else if (msSelectedWidget == MsSelectedWidget::Content) {
-					inputHandleEvent(event, msContentInputText, renderer, robotoF);
+					if (event.type == SDL_TEXTINPUT) {
+						msContentInputText.setText(renderer, robotoF, msContentInputText.text + event.text.text, { TEXT_COLOR });
+						textInputEventInMsContentInputText = true;
+					}
+					if (event.type == SDL_KEYDOWN) {
+						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+							if (!msContentInputText.text.empty()) {
+								msContentInputText.text.pop_back();
+								if (!msContentInputText.text.empty() && msContentInputText.text.back() == '\036') {
+									msContentInputText.text.pop_back();
+								}
+								msContentInputText.setText(renderer, robotoF, msContentInputText.text, { TEXT_COLOR });
+							}
+						}
+						if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
+							msContentInputText.setText(renderer, robotoF, msContentInputText.text + "\n", { TEXT_COLOR });
+						}
+					}
 				}
 
 				if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
@@ -861,9 +1025,6 @@ int main(int argc, char* argv[])
 						if (msSelectedWidget >= MsSelectedWidget::Count) {
 							msSelectedWidget = (MsSelectedWidget)0;
 						}
-					}
-					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-						sendMessage(msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
 					}
 				}
 				if (event.type == SDL_KEYUP) {
@@ -890,7 +1051,7 @@ int main(int argc, char* argv[])
 					realMousePos.y = event.motion.y;
 				}
 			}
-			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
 			SDL_RenderClear(renderer);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 			SDL_RenderFillRectF(renderer, &msNameR);
@@ -898,10 +1059,74 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRectF(renderer, &msTopicR);
 			SDL_RenderFillRectF(renderer, &msContentR);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
+			msNameText.draw(renderer);
+			msSurnameText.draw(renderer);
+			msTopicText.draw(renderer);
 			drawInBorders(msNameInputText, msNameR, renderer, robotoF);
 			drawInBorders(msSurnameInputText, msSurnameR, renderer, robotoF);
 			drawInBorders(msTopicInputText, msTopicR, renderer, robotoF);
-			drawInBorders(msContentInputText, msContentR, renderer, robotoF);
+
+			{
+				std::vector<Text> texts;
+				std::stringstream ss(msContentInputText.text);
+				texts.push_back(Text());
+				texts.back() = msContentInputText;
+#if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
+				while (std::getline(ss, texts.back().text, '\n')) {
+					texts.back().setText(renderer, robotoF, texts.back().text, { TEXT_COLOR });
+					texts.push_back(Text());
+					texts.back() = msContentInputText;
+				}
+				texts.pop_back();
+#endif
+				if (!texts.empty()) {
+					if (textInputEventInMsContentInputText) {
+						textInputEventInMsContentInputText = false;
+						if (texts.back().dstR.x + texts.back().dstR.w > msContentR.x + msContentR.w - 20) {
+							std::size_t lastSpacePos = texts.back().text.rfind(" ");
+							if (lastSpacePos != std::string::npos) {
+								msContentInputText.text[msContentInputText.text.rfind(" ")] = '\n';
+								texts.back().text[lastSpacePos] = '\n';
+								texts.back().setText(renderer, robotoF, texts.back().text.substr(0, lastSpacePos + 1), { TEXT_COLOR });
+								texts.push_back(Text());
+								texts.back() = msContentInputText;
+								texts.back().text = texts.back().text.substr(lastSpacePos + 1);
+							}
+							else {
+								msContentInputText.text.push_back('\n');
+							}
+						}
+					}
+					for (int i = 1; i < texts.size(); ++i) {
+						texts[i].dstR.y = texts[i - 1].dstR.y + texts[i - 1].dstR.h;
+					}
+					bool shouldScrollUp = false;
+					for (Text& text : texts) {
+						if (text.dstR.y < msContentR.y) {
+							shouldScrollUp = true;
+							break;
+						}
+					}
+					if (texts.back().dstR.y + texts.back().dstR.h > msContentR.y + msContentR.h) {
+						while (texts.back().dstR.y + texts.back().dstR.h > msContentR.y + msContentR.h) {
+							for (Text& text : texts) {
+								text.dstR.y -= text.dstR.h;
+							}
+						}
+					}
+					else if (shouldScrollUp) {
+						for (Text& text : texts) {
+							text.dstR.y += text.dstR.h;
+						}
+					}
+					for (Text& text : texts) {
+						if (text.dstR.y >= msContentR.y) {
+							text.draw(renderer);
+						}
+					}
+				}
+			}
+
 			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
 			if (msSelectedWidget == MsSelectedWidget::Name) {
 				SDL_RenderDrawRectF(renderer, &msNameR);
