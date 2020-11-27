@@ -40,7 +40,7 @@
 #endif
 
 // NOTE: Remember to uncomment it on every release
-//#define RELEASE
+//#define RELEASE 1
 
 #if defined _MSC_VER && defined RELEASE
 #pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
@@ -386,7 +386,7 @@ int main(int argc, char* argv[])
 	SDL_Init(SDL_INIT_EVERYTHING);
 	TTF_Init();
 	SDL_GetMouseState(&mousePos.x, &mousePos.y);
-#if 1 // TODO: Remember to turn it off on reelase
+#if 1 && !RELEASE // TODO: Remember to turn it off on reelase
 	SDL_Window * window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
 	SDL_DisplayMode dm;
 	SDL_GetCurrentDisplayMode(0, &dm);
@@ -446,9 +446,9 @@ int main(int argc, char* argv[])
 	SDL_Texture* writeMessageT = IMG_LoadTexture(renderer, "res/writeMessage.png");
 	SDL_FRect writeMessageBtnR;
 	writeMessageBtnR.w = 256;
-	writeMessageBtnR.h = 64;
-	writeMessageBtnR.x = 5;
-	writeMessageBtnR.y = windowHeight - writeMessageBtnR.h - 5;
+	writeMessageBtnR.h = 60;
+	writeMessageBtnR.x = 0;
+	writeMessageBtnR.y = windowHeight - writeMessageBtnR.h;
 #endif
 #if 1 // NOTE: MessageContent
 	SDL_Texture * closeT = IMG_LoadTexture(renderer, "res/close.png");
@@ -484,6 +484,12 @@ int main(int argc, char* argv[])
 	std::vector<Text> texts;
 #endif
 #if 1 // NOTE: MessageSend
+	SDL_Texture * sendT = IMG_LoadTexture(renderer, "res/send.png");
+	SDL_FRect msSendBtnR;
+	msSendBtnR.w = 256;
+	msSendBtnR.h = 64;
+	msSendBtnR.x = 0;
+	msSendBtnR.y = windowHeight - msSendBtnR.h;
 	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
 	SDL_FRect msNameR;
 	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 100.f / 3.f);
@@ -541,7 +547,7 @@ int main(int argc, char* argv[])
 	msTopicInputText.wMultiplier = 0.3;
 	SDL_FRect msContentR;
 	msContentR.w = windowWidth;
-	msContentR.h = windowHeight - closeBtnR.h;
+	msContentR.h = windowHeight - closeBtnR.h - msSendBtnR.h;
 	msContentR.x = 0;
 	msContentR.y = closeBtnR.y + closeBtnR.h;
 	Text msContentInputText;
@@ -553,12 +559,6 @@ int main(int argc, char* argv[])
 	msContentInputText.autoAdjustW = true;
 	msContentInputText.wMultiplier = 0.3;
 	bool textInputEventInMsContentInputText = false;
-	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
-	SDL_FRect msSendBtnR;
-	msSendBtnR.w = 256;
-	msSendBtnR.h = 64;
-	msSendBtnR.x = 5;
-	msSendBtnR.y = windowHeight - msSendBtnR.h - 5;
 #endif
 	int messageIndexToShow = -1;
 	while (running) {
@@ -600,6 +600,12 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
+					if (SDL_PointInFRect(&mousePos, &nameR)) {
+						isNameSelected = true;
+					}
+					else if (SDL_PointInFRect(&mousePos, &surnameR)) {
+						isNameSelected = false;
+					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
@@ -658,45 +664,48 @@ int main(int argc, char* argv[])
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
 					for (int i = 0; i < messages.size(); ++i) {
-						if (SDL_PointInFRect(&mousePos, &messages[i].r)) {
-							state = State::MessageContent;
-							messageIndexToShow = i;
-							{
-								// TODO: Set width and height of texts in same way as it's in msContentInputText
-								std::stringstream ss(messages[messageIndexToShow].contentText.text);
-								texts.push_back(Text());
-								texts.back() = messages[messageIndexToShow].contentText;
-#if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
-								while (std::getline(ss, texts.back().text, '\n')) {
-									texts.back().autoAdjustW = true;
-									texts.back().wMultiplier = 0.3;
-									texts.back().dstR.h = 20;
-									texts.back().dstR.x = 0;
-									texts.back().dstR.y = closeBtnR.y + closeBtnR.h;
-									texts.back().setText(renderer, robotoF, texts.back().text);
+						if (messages[i].r.y + messages[i].r.h < writeMessageBtnR.y) {
+							if (SDL_PointInFRect(&mousePos, &messages[i].r)) {
+								state = State::MessageContent;
+								messageIndexToShow = i;
+								texts.clear();
+								{
+									std::stringstream ss(messages[messageIndexToShow].contentText.text);
 									texts.push_back(Text());
 									texts.back() = messages[messageIndexToShow].contentText;
-								}
-								texts.pop_back();
+#if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
+									while (std::getline(ss, texts.back().text, '\n')) {
+										texts.back().autoAdjustW = true;
+										texts.back().wMultiplier = 0.3;
+										texts.back().dstR.h = writeMessageBtnR.h / 3;
+										texts.back().dstR.x = 0;
+										texts.back().dstR.y = closeBtnR.y + closeBtnR.h;
+										texts.back().setText(renderer, robotoF, texts.back().text);
+										texts.push_back(Text());
+										texts.back() = messages[messageIndexToShow].contentText;
+									}
+									texts.pop_back();
 #endif
-								if (!texts.empty()) {
-									for (int i = 1; i < texts.size(); ++i) {
-										texts[i].dstR.y = texts[i - 1].dstR.y + texts[i - 1].dstR.h;
-									}
-									if (scroll == Scroll::Up) {
-										for (Text& text : texts) {
-											text.dstR.y += text.dstR.h;
+									if (!texts.empty()) {
+										for (int i = 1; i < texts.size(); ++i) {
+											texts[i].dstR.y = texts[i - 1].dstR.y + texts[i - 1].dstR.h;
 										}
-									}
-									else if (scroll == Scroll::Down) {
-										for (Text& text : texts) {
-											text.dstR.y -= text.dstR.h;
+										if (scroll == Scroll::Up) {
+											for (Text& text : texts) {
+												text.dstR.y += text.dstR.h;
+											}
 										}
+										else if (scroll == Scroll::Down) {
+											for (Text& text : texts) {
+												text.dstR.y -= text.dstR.h;
+											}
+										}
+										scroll = Scroll::None;
 									}
-									scroll = Scroll::None;
 								}
+								scrollBtnR.y = scrollR.y;
+								break;
 							}
-							break;
 						}
 					}
 					if (SDL_PointInFRect(&mousePos, &writeMessageBtnR)) {
@@ -845,16 +854,17 @@ int main(int argc, char* argv[])
 			// TODO: Handle errors? E.g. no internet connection.
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
-			// TODO: Add scroll when messages enter send button?
 			for (int i = 0; i < messages.size(); ++i) {
-				SDL_SetRenderDrawColor(renderer, 37, 37, 68, 0);
-				SDL_RenderFillRectF(renderer, &messages[i].r);
-				SDL_SetRenderDrawColor(renderer, 25, 25, 25, 0);
-				SDL_RenderDrawRectF(renderer, &messages[i].r);
-				messages[i].topicText.draw(renderer);
-				messages[i].senderNameText.draw(renderer);
-				messages[i].senderSurnameText.draw(renderer);
-				messages[i].dateText.draw(renderer);
+				if (messages[i].r.y + messages[i].r.h < writeMessageBtnR.y) {
+					SDL_SetRenderDrawColor(renderer, 37, 37, 68, 0);
+					SDL_RenderFillRectF(renderer, &messages[i].r);
+					SDL_SetRenderDrawColor(renderer, 25, 25, 25, 0);
+					SDL_RenderDrawRectF(renderer, &messages[i].r);
+					messages[i].topicText.draw(renderer);
+					messages[i].senderNameText.draw(renderer);
+					messages[i].senderSurnameText.draw(renderer);
+					messages[i].dateText.draw(renderer);
+				}
 			}
 			SDL_RenderCopyF(renderer, writeMessageT, 0, &writeMessageBtnR);
 			SDL_RenderPresent(renderer);
@@ -909,15 +919,15 @@ int main(int argc, char* argv[])
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
-			topicText.draw(renderer); 
+			topicText.draw(renderer);
 			if (!texts.empty()) {
 				if (scroll == Scroll::Up) {
 					if (texts.front().dstR.y != contentR.y) {
 						for (Text& text : texts) {
 							text.dstR.y += text.dstR.h;
 						}
-						float visible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
-						float percent = 100 / (texts.size() - visible);
+						float maxVisible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
+						float percent = 100 / (texts.size() - maxVisible);
 						float max = 0 + scrollR.h - scrollBtnR.h;
 						float min = 0;
 						scrollBtnR.y -= (percent * (max - min) / 100) + min;
@@ -928,8 +938,8 @@ int main(int argc, char* argv[])
 						for (Text& text : texts) {
 							text.dstR.y -= text.dstR.h;
 						}
-						float visible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
-						float percent = 100 / (texts.size() - visible);
+						float maxVisible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
+						float percent = 100 / (texts.size() - maxVisible);
 						float max = 0 + scrollR.h - scrollBtnR.h;
 						float min = 0;
 						scrollBtnR.y += (percent * (max - min) / 100) + min;
@@ -941,11 +951,14 @@ int main(int argc, char* argv[])
 						text.draw(renderer);
 					}
 				}
+				float maxVisible = contentR.h / texts.front().dstR.h; // NOTE: Assume that items have same height
+				if (maxVisible < texts.size()) {
+					SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
+					SDL_RenderFillRectF(renderer, &scrollR);
+					SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
+					SDL_RenderFillRectF(renderer, &scrollBtnR);
+				}
 			}
-			SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
-			SDL_RenderFillRectF(renderer, &scrollR);
-			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
-			SDL_RenderFillRectF(renderer, &scrollBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageSend) {
@@ -1037,6 +1050,18 @@ int main(int argc, char* argv[])
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
 						sendMessage(msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
+					}
+					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
+						msSelectedWidget = MsSelectedWidget::Name;
+					}
+					else if (SDL_PointInFRect(&mousePos, &msSurnameR)) {
+						msSelectedWidget = MsSelectedWidget::Surname;
+					}
+					else if (SDL_PointInFRect(&mousePos, &msTopicR)) {
+						msSelectedWidget = MsSelectedWidget::Topic;
+					}
+					else if (SDL_PointInFRect(&mousePos, &msContentR)) {
+						msSelectedWidget = MsSelectedWidget::Content;
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
