@@ -97,9 +97,6 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="vendor\PUGIXML\src\pugixml.cpp" />
   </ItemGroup>
-  <ItemGroup>
-    <Text Include="res\credits.txt" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

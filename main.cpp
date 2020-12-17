@@ -18,6 +18,7 @@
 #include <SDL_net.h>
 //#include <SDL_gpu.h>
 #include <SFML/Network.hpp>
+#include <SFML/Audio.hpp>
 //#include <SFML/Graphics.hpp>
 #include <iostream>
 #include <string>
@@ -28,6 +29,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <thread>
 #ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
 #include <jni.h>
@@ -58,13 +60,26 @@ SDL_Point realMousePos;
 bool keys[SDL_NUM_SCANCODES];
 bool buttons[SDL_BUTTON_X2 + 1];
 SDL_Renderer* renderer;
+std::string prefPath;
 
+#ifndef RELEASE
+#define SERVER
+#endif
 #define BG_COLOR 0,0,0,0
 #define TEXT_COLOR 0,0,0,0
+#define SERVER_PORT 4800 // TODO: Set some other port?
+
+#undef SendMessage
+
+enum PacketType {
+	SendMessage,
+	ReceiveMessages,
+	MakeCall,
+};
 
 void logOutputCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
 {
-	std::cout << message << std::endl;
+	std::printf("%s\n", message);
 }
 
 int random(int min, int max)
@@ -307,6 +322,7 @@ enum class State {
 	MessageList,
 	MessageContent,
 	MessageSend,
+	Call,
 };
 
 struct Message {
@@ -348,23 +364,19 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
-void sendMessage(Text& msNameInputText, Text& msSurnameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText, Text& surnameInputText,
+void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msSurnameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText, Text& surnameInputText,
 	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font)
 {
-	// TODO: Use more secure HTTP(s) -> curl
-	// TODO: Do it on second thread (to don't block GUI) ???
-	std::stringstream ss;
-	ss
-		<< "receiverName=" << msNameInputText.text
-		<< "&receiverSurname=" << msSurnameInputText.text
-		<< "&topic=" << msTopicInputText.text
-		<< "&content=" << msContentInputText.text
-		<< "&senderName=" << nameInputText.text
-		<< "&senderSurname=" << surnameInputText.text;
-	sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
-	sf::Http http("http://senderprogram.000webhostapp.com/");
-	sf::Http::Response response = http.sendRequest(request);
-	// TODO: Handle errors? E.g. no internet connection.
+	sf::Packet packet;
+	packet
+		<< PacketType::SendMessage
+		<< msNameInputText.text
+		<< msSurnameInputText.text
+		<< msTopicInputText.text
+		<< msContentInputText.text
+		<< nameInputText.text
+		<< surnameInputText.text;
+	socket.send(packet); // TODO: Do something on fail + put it on separate thread?
 	msNameInputText.setText(renderer, font, "");
 	msSurnameInputText.setText(renderer, font, "");
 	msTopicInputText.setText(renderer, font, "");
@@ -378,14 +390,179 @@ enum class Scroll {
 	Down,
 };
 
+struct Client {
+	std::shared_ptr<sf::TcpSocket> socket;
+
+	Client()
+	{
+		socket = std::make_shared<sf::TcpSocket>();
+	}
+};
+
+pugi::xml_document loadDataDoc()
+{
+	pugi::xml_document srcDoc;
+	srcDoc.load_file((prefPath + "data.xml").c_str());
+	auto currMessageNodes = srcDoc.child("root").children("message");
+	auto currCallNodes = srcDoc.child("root").children("call");
+	pugi::xml_document dstDoc;
+	pugi::xml_node rootNode = dstDoc.append_child("root");
+	for (pugi::xml_node& currMessageNode : currMessageNodes) {
+		pugi::xml_node messageNode = rootNode.append_child("message");
+		messageNode.append_child("receiverName").append_child(pugi::node_pcdata).set_value(currMessageNode.child("receiverName").text().as_string());
+		messageNode.append_child("receiverSurname").append_child(pugi::node_pcdata).set_value(currMessageNode.child("receiverSurname").text().as_string());
+		messageNode.append_child("topic").append_child(pugi::node_pcdata).set_value(currMessageNode.child("topic").text().as_string());
+		messageNode.append_child("content").append_child(pugi::node_pcdata).set_value(currMessageNode.child("content").text().as_string());
+		messageNode.append_child("senderName").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderName").text().as_string());
+		messageNode.append_child("senderSurname").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderSurname").text().as_string());
+	}
+	for (pugi::xml_node& currCallNode : currCallNodes) {
+		pugi::xml_node callNode = rootNode.append_child("call");
+		callNode.append_child("callerName").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerName").text().as_string());
+		callNode.append_child("callerSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerSurname").text().as_string());
+		callNode.append_child("receiverName").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverName").text().as_string());
+		callNode.append_child("receiverSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverSurname").text().as_string());
+	}
+	return dstDoc;
+}
+
+void runServer()
+{
+	sf::TcpListener listener;
+	listener.listen(SERVER_PORT);
+	std::vector<Client> clients;
+	sf::SocketSelector selector;
+	selector.add(listener);
+	bool running = true;
+	while (running) {
+		if (selector.wait()) {
+			if (selector.isReady(listener)) {
+				clients.push_back(Client());
+				if (listener.accept(*(clients.back().socket)) == sf::Socket::Done) {
+					selector.add(*(clients.back().socket));
+				}
+				else {
+					clients.pop_back();
+				}
+			}
+			else {
+				for (int i = 0; i < clients.size(); ++i) {
+					if (selector.isReady(*(clients[i].socket))) {
+						sf::Packet packet;
+						if (clients[i].socket->receive(packet) == sf::Socket::Done) {
+							PacketType packetType;
+							{
+								int tmp;
+								packet >> tmp;
+								packetType = (PacketType)tmp;
+							}
+							if (packetType == PacketType::SendMessage) {
+								std::string msNameInputText;
+								std::string msSurnameInputText;
+								std::string msTopicInputText;
+								std::string msContentInputText;
+								std::string nameInputText;
+								std::string surnameInputText;
+								packet >> msNameInputText >> msSurnameInputText >> msTopicInputText >> msContentInputText >> nameInputText >> surnameInputText;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								pugi::xml_node messageNode = rootNode.append_child("message");
+								pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
+								pugi::xml_node receiverSurnameNode = messageNode.append_child("receiverSurname");
+								pugi::xml_node topicNode = messageNode.append_child("topic");
+								pugi::xml_node contentNode = messageNode.append_child("content");
+								pugi::xml_node senderNameNode = messageNode.append_child("senderName");
+								pugi::xml_node senderSurnameNode = messageNode.append_child("senderSurname");
+								receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
+								receiverSurnameNode.append_child(pugi::node_pcdata).set_value(msSurnameInputText.c_str());
+								topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
+								contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
+								senderNameNode.append_child(pugi::node_pcdata).set_value(nameInputText.c_str());
+								senderSurnameNode.append_child(pugi::node_pcdata).set_value(surnameInputText.c_str());
+								doc.save_file((prefPath + "data.xml").c_str());
+							}
+							else if (packetType == PacketType::ReceiveMessages) {
+								std::string name, surname;
+								packet >> name >> surname;
+								pugi::xml_document doc = loadDataDoc();
+								auto messageNodes = doc.child("root").children("message");
+								sf::Packet answerPacket;
+								for (pugi::xml_node messageNode : messageNodes) {
+									if (messageNode.child("receiverName").text().as_string() == name && messageNode.child("receiverSurname").text().as_string() == surname) {
+										answerPacket
+											<< messageNode.child("topic").text().as_string()
+											<< messageNode.child("senderName").text().as_string()
+											<< messageNode.child("senderSurname").text().as_string()
+											<< messageNode.child("date").text().as_string()
+											<< messageNode.child("content").text().as_string();
+									}
+								}
+								clients[i].socket->send(answerPacket);
+							}
+							else if (packetType == PacketType::MakeCall) {
+								std::string callerName, callerSurname, receiverName, receiverSurname;
+								packet >> callerName >> callerSurname >> receiverName >> receiverSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								pugi::xml_node callNode = rootNode.append_child("call");
+								pugi::xml_node callerNameNode = callNode.append_child("callerName");
+								pugi::xml_node callerSurnameNode = callNode.append_child("callerSurname");
+								pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
+								pugi::xml_node receiverSurnameNode = callNode.append_child("receiverSurname");
+								callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
+								callerSurnameNode.append_child(pugi::node_pcdata).set_value(callerSurname.c_str());
+								receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
+								receiverSurnameNode.append_child(pugi::node_pcdata).set_value(receiverSurname.c_str());
+								doc.save_file((prefPath + "data.xml").c_str());
+							}
+						}
+						else if (clients[i].socket->receive(packet) == sf::Socket::Disconnected) {
+							selector.remove(*clients[i].socket);
+							clients.erase(clients.begin() + i--);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+struct MessageList {
+	std::vector<Message> messages;
+	SDL_Texture* writeMessageT = 0;
+	SDL_Texture* callT = 0;
+	SDL_FRect writeMessageBtnR{};
+	SDL_FRect callBtnR{};
+	Text nameText;
+	SDL_FRect nameR{};
+	Text nameInputText;
+	Text surnameText;
+	SDL_FRect surnameR{};
+	Text surnameInputText;
+	bool isNameSelected = true;
+	SDL_Texture* pickUpT = 0;
+	SDL_FRect pickUpBtnR{};
+	Text callerNameAndSurnameText;
+	bool hasPendingCall = false;
+};
+
 int main(int argc, char* argv[])
 {
+	prefPath = SDL_GetPrefPath("Huberti", "Sender");
 	std::srand(std::time(0));
 	SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
 	SDL_LogSetOutputFunction(logOutputCallback, 0);
 	SDL_Init(SDL_INIT_EVERYTHING);
 	TTF_Init();
 	SDL_GetMouseState(&mousePos.x, &mousePos.y);
+#ifdef SERVER
+	std::thread t([&] {
+		runServer();
+		});
+	t.detach();
+#endif
+	sf::TcpSocket socket;
+	socket.connect("192.168.1.10", SERVER_PORT); // TODO: Put it on seperate thread + do something with timeout variable(when it can't connect to remote server) + change Ip address to public one?
 #if 1 && !RELEASE // TODO: Remember to turn it off on reelase
 	SDL_Window * window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
 	SDL_DisplayMode dm;
@@ -442,13 +619,55 @@ int main(int argc, char* argv[])
 	bool isNameSelected = true;
 #endif
 #if 1 // NOTE: MessageList
-	std::vector<Message> messages;
-	SDL_Texture* writeMessageT = IMG_LoadTexture(renderer, "res/writeMessage.png");
-	SDL_FRect writeMessageBtnR;
-	writeMessageBtnR.w = 256;
-	writeMessageBtnR.h = 60;
-	writeMessageBtnR.x = 0;
-	writeMessageBtnR.y = windowHeight - writeMessageBtnR.h;
+	MessageList ml;
+	ml.writeMessageT = IMG_LoadTexture(renderer, "res/writeMessage.png");
+	ml.writeMessageBtnR.w = 256;
+	ml.writeMessageBtnR.h = 60;
+	ml.writeMessageBtnR.x = 0;
+	ml.writeMessageBtnR.y = windowHeight - ml.writeMessageBtnR.h;
+	ml.nameR.w = 200;
+	ml.nameR.h = 30;
+	ml.nameR.x = ml.writeMessageBtnR.x + ml.writeMessageBtnR.w;
+	ml.nameR.y = ml.writeMessageBtnR.y + ml.writeMessageBtnR.h / 2;
+	ml.nameInputText.setText(renderer, robotoF, "");
+	ml.nameInputText.dstR = ml.nameR;
+	ml.nameInputText.dstR.x += 3;
+	ml.nameInputText.autoAdjustW = true;
+	ml.nameInputText.wMultiplier = 0.5;
+	ml.nameText.setText(renderer, robotoF, u8"Imię");
+	ml.nameText.dstR.w = 40;
+	ml.nameText.dstR.h = 20;
+	ml.nameText.dstR.x = ml.nameR.x + ml.nameR.w / 2 - ml.nameText.dstR.w / 2;
+	ml.nameText.dstR.y = ml.writeMessageBtnR.y;
+	ml.surnameR.w = 200;
+	ml.surnameR.h = 30;
+	ml.surnameR.x = ml.nameR.x + ml.nameR.w + 5;
+	ml.surnameR.y = ml.writeMessageBtnR.y + ml.writeMessageBtnR.h / 2;
+	ml.surnameInputText.setText(renderer, robotoF, "");
+	ml.surnameInputText.dstR = ml.surnameR;
+	ml.surnameInputText.dstR.x += 3;
+	ml.surnameInputText.autoAdjustW = true;
+	ml.surnameInputText.wMultiplier = 0.5;
+	ml.surnameText.setText(renderer, robotoF, u8"Nazwisko");
+	ml.surnameText.dstR.w = 80;
+	ml.surnameText.dstR.h = 20;
+	ml.surnameText.dstR.x = ml.surnameR.x + ml.surnameR.w / 2 - ml.surnameText.dstR.w / 2;
+	ml.surnameText.dstR.y = ml.writeMessageBtnR.y;
+	ml.callT = IMG_LoadTexture(renderer, "res/call.png");
+	ml.callBtnR.w = 256;
+	ml.callBtnR.h = 60;
+	ml.callBtnR.x = ml.surnameR.x + ml.surnameR.w;
+	ml.callBtnR.y = windowHeight - ml.callBtnR.h;
+	ml.pickUpT = IMG_LoadTexture(renderer, "res/pickUp.png");
+	ml.pickUpBtnR.w = 256;
+	ml.pickUpBtnR.h = 60;
+	ml.pickUpBtnR.x = ml.callBtnR.x + ml.callBtnR.w + 5;
+	ml.pickUpBtnR.y = windowHeight - ml.pickUpBtnR.h;
+	ml.callerNameAndSurnameText.autoAdjustW = true;
+	ml.callerNameAndSurnameText.wMultiplier = 0.3;
+	ml.callerNameAndSurnameText.dstR.h = 20;
+	ml.callerNameAndSurnameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
+	ml.callerNameAndSurnameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameAndSurnameText.dstR.h / 2;
 #endif
 #if 1 // NOTE: MessageContent
 	SDL_Texture * closeT = IMG_LoadTexture(renderer, "res/close.png");
@@ -560,6 +779,9 @@ int main(int argc, char* argv[])
 	msContentInputText.wMultiplier = 0.3;
 	bool textInputEventInMsContentInputText = false;
 #endif
+#if 1 // NOTE: Call
+
+#endif
 	int messageIndexToShow = -1;
 	while (running) {
 		if (state == State::LoginAndRegister) {
@@ -657,32 +879,49 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_KEYDOWN) {
 					keys[event.key.keysym.scancode] = true;
+					if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+						if (ml.isNameSelected) {
+							if (!ml.nameInputText.text.empty()) {
+								ml.nameInputText.text.pop_back();
+								ml.nameInputText.setText(renderer, robotoF, ml.nameInputText.text, { TEXT_COLOR });
+							}
+						}
+						else {
+							if (!ml.surnameInputText.text.empty()) {
+								ml.surnameInputText.text.pop_back();
+								ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text, { TEXT_COLOR });
+							}
+						}
+					}
+					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
+						ml.isNameSelected = !ml.isNameSelected;
+					}
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
 				}
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
-					for (int i = 0; i < messages.size(); ++i) {
-						if (messages[i].r.y + messages[i].r.h < writeMessageBtnR.y) {
-							if (SDL_PointInFRect(&mousePos, &messages[i].r)) {
+					for (int i = 0; i < ml.messages.size(); ++i) {
+						if (ml.messages[i].r.y + ml.messages[i].r.h < ml.writeMessageBtnR.y) {
+							if (SDL_PointInFRect(&mousePos, &ml.messages[i].r)) {
 								state = State::MessageContent;
 								messageIndexToShow = i;
 								texts.clear();
 								{
-									std::stringstream ss(messages[messageIndexToShow].contentText.text);
+									std::stringstream ss(ml.messages[messageIndexToShow].contentText.text);
 									texts.push_back(Text());
-									texts.back() = messages[messageIndexToShow].contentText;
+									texts.back() = ml.messages[messageIndexToShow].contentText;
 #if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
 									while (std::getline(ss, texts.back().text, '\n')) {
 										texts.back().autoAdjustW = true;
 										texts.back().wMultiplier = 0.3;
-										texts.back().dstR.h = writeMessageBtnR.h / 3;
+										texts.back().dstR.h = ml.writeMessageBtnR.h / 3;
 										texts.back().dstR.x = 0;
 										texts.back().dstR.y = closeBtnR.y + closeBtnR.h;
 										texts.back().setText(renderer, robotoF, texts.back().text);
 										texts.push_back(Text());
-										texts.back() = messages[messageIndexToShow].contentText;
+										texts.back() = ml.messages[messageIndexToShow].contentText;
 									}
 									texts.pop_back();
 #endif
@@ -708,8 +947,42 @@ int main(int argc, char* argv[])
 							}
 						}
 					}
-					if (SDL_PointInFRect(&mousePos, &writeMessageBtnR)) {
+					if (SDL_PointInFRect(&mousePos, &ml.writeMessageBtnR)) {
 						state = State::MessageSend;
+					}
+					else if (SDL_PointInFRect(&mousePos, &ml.nameR)) {
+						ml.isNameSelected = true;
+					}
+					else if (SDL_PointInFRect(&mousePos, &ml.surnameR)) {
+						ml.isNameSelected = false;
+					}
+					else if (SDL_PointInFRect(&mousePos, &ml.callBtnR)) {
+						sf::Packet packet;
+						packet
+							<< PacketType::MakeCall
+							<< nameInputText.text
+							<< surnameInputText.text
+							<< ml.nameInputText.text
+							<< ml.surnameInputText.text;
+						socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+					}
+					else if (SDL_PointInFRect(&mousePos, &ml.pickUpBtnR)) {
+						// TODO: Implement
+#if 0
+							// TODO: Use more secure HTTP(s) -> curl
+							// TODO: Do it on second thread (to don't block GUI) ???
+						std::stringstream ss;
+						ss
+							<< "operation=acceptCall"
+							<< "&name=" << nameInputText.text
+							<< "&surname=" << surnameInputText.text;
+						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
+						sf::Http http("http://senderprogram.000webhostapp.com/");
+						sf::Http::Response response = http.sendRequest(request);
+						// TODO: Handle errors? E.g. no internet connection.
+						ml.nameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
+						ml.surnameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
+#endif
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -726,13 +999,13 @@ int main(int argc, char* argv[])
 				if (event.type == SDL_MOUSEWHEEL) {
 					if (event.wheel.y > 0) // scroll up
 					{
-						if (!messages.empty()) {
-							float minY = messages.front().r.y;
-							for (int i = 1; i < messages.size(); ++i) {
-								minY = std::min(minY, messages[i].r.y);
+						if (!ml.messages.empty()) {
+							float minY = ml.messages.front().r.y;
+							for (int i = 1; i < ml.messages.size(); ++i) {
+								minY = std::min(minY, ml.messages[i].r.y);
 							}
 							if (minY < 0) {
-								for (Message& message : messages) {
+								for (Message& message : ml.messages) {
 									message.r.y += windowHeight;
 									message.topicText.dstR.y += windowHeight;
 									message.senderNameText.dstR.y += windowHeight;
@@ -744,13 +1017,13 @@ int main(int argc, char* argv[])
 					}
 					else if (event.wheel.y < 0) // scroll down
 					{
-						if (!messages.empty()) {
-							float maxY = messages.front().r.y;
-							for (int i = 1; i < messages.size(); ++i) {
-								maxY = std::max(maxY, messages[i].r.y);
+						if (!ml.messages.empty()) {
+							float maxY = ml.messages.front().r.y;
+							for (int i = 1; i < ml.messages.size(); ++i) {
+								maxY = std::max(maxY, ml.messages[i].r.y);
 							}
 							if (maxY >= windowHeight) {
-								for (Message& message : messages) {
+								for (Message& message : ml.messages) {
 									message.r.y -= windowHeight;
 									message.topicText.dstR.y -= windowHeight;
 									message.senderNameText.dstR.y -= windowHeight;
@@ -761,112 +1034,150 @@ int main(int argc, char* argv[])
 						}
 					}
 				}
-			}
-			// TODO: Use more secure HTTP(s) -> curl
-			// TODO: Do this from time to time + do so that it won't block UI
-			std::stringstream ss;
-			ss << "name=" << nameInputText.text << "&surname=" << surnameInputText.text;
-			sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
-			sf::Http http("http://senderprogram.000webhostapp.com/");
-			sf::Http::Response response = http.sendRequest(request);
-			if (response.getStatus() == sf::Http::Response::Status::Ok) {
-				/*
-				ASCII Oct	Unicode Name					Common Name			Usage
-				34			INFORMATION SEPARATOR FOUR		file separator		End of file. Or between a concatenation of what might otherwise be separate files.
-				35			INFORMATION SEPARATOR THREE		group separator		Between sections of data. Not needed in simple data files.
-				36			INFORMATION SEPARATOR TWO		record separator	End of a record or row.
-				37			INFORMATION SEPARATOR ONE		unit separator		Between fields of a record, or members of a row.
-				*/
-				std::string body = response.getBody();
-				{
-					std::stringstream ss(body);
-					std::getline(ss, body, '\035');
-					std::getline(ss, body, '\035');
-				}
-				{
-					std::stringstream ss(body);
-					std::vector<Message> newMessages;
-					std::string message;
-					{
-						int i = 0;
-						while (std::getline(ss, message, '\036')) {
-							std::stringstream ss(message);
-							newMessages.push_back(Message());
-							std::getline(ss, newMessages.back().topicText.text, '\037');
-							std::getline(ss, newMessages.back().senderNameText.text, '\037');
-							std::getline(ss, newMessages.back().senderSurnameText.text, '\037');
-							std::getline(ss, newMessages.back().dateText.text, '\037');
-							std::getline(ss, newMessages.back().contentText.text, '\037');
-
-							newMessages.back().r.w = windowWidth;
-							newMessages.back().r.h = 20;
-							newMessages.back().r.x = 0;
-							newMessages.back().r.y = newMessages.back().r.h * i;
-
-							newMessages.back().topicText.dstR = newMessages.back().r;
-							newMessages.back().topicText.autoAdjustW = true;
-							newMessages.back().topicText.setText(renderer, robotoF, newMessages.back().topicText.text);
-							newMessages.back().topicText.dstR.w *= 0.3;
-
-							newMessages.back().dateText.dstR = newMessages.back().r;
-							newMessages.back().dateText.autoAdjustW = true;
-							newMessages.back().dateText.setText(renderer, robotoF, newMessages.back().dateText.text);
-							newMessages.back().dateText.dstR.w *= 0.3;
-							newMessages.back().dateText.dstR.x = windowWidth - newMessages.back().dateText.dstR.w - 3;
-
-							newMessages.back().senderSurnameText.dstR = newMessages.back().r;
-							newMessages.back().senderSurnameText.autoAdjustW = true;
-							newMessages.back().senderSurnameText.setText(renderer, robotoF, newMessages.back().senderSurnameText.text);
-							newMessages.back().senderSurnameText.dstR.w *= 0.3;
-							newMessages.back().senderSurnameText.dstR.x = newMessages.back().dateText.dstR.x - newMessages.back().senderSurnameText.dstR.w - 10;
-
-							newMessages.back().senderNameText.dstR = newMessages.back().r;
-							newMessages.back().senderNameText.autoAdjustW = true;
-							newMessages.back().senderNameText.setText(renderer, robotoF, newMessages.back().senderNameText.text);
-							newMessages.back().senderNameText.dstR.w *= 0.3;
-							newMessages.back().senderNameText.dstR.x = newMessages.back().senderSurnameText.dstR.x - newMessages.back().senderNameText.dstR.w - 10;
-
-							newMessages.back().contentText.dstR = newMessages.back().topicText.dstR;
-							newMessages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
-							newMessages.back().contentText.autoAdjustW = true;
-							newMessages.back().contentText.setText(renderer, robotoF, newMessages.back().contentText.text);
-							newMessages.back().contentText.dstR.w *= 0.3;
-							++i;
-						}
-					}
-					if (messages.size() != newMessages.size()) {
-						messages = newMessages;
+				if (event.type == SDL_TEXTINPUT) {
+					if (ml.isNameSelected) {
+						ml.nameInputText.setText(renderer, robotoF, ml.nameInputText.text + event.text.text, { TEXT_COLOR });
 					}
 					else {
-						for (int i = 0; i < messages.size(); ++i) {
-							if (messages[i].topicText.text != newMessages[i].topicText.text ||
-								messages[i].senderNameText.text != newMessages[i].senderNameText.text ||
-								messages[i].senderSurnameText.text != newMessages[i].senderSurnameText.text ||
-								messages[i].dateText.text != newMessages[i].dateText.text ||
-								messages[i].contentText.text != newMessages[i].contentText.text) {
-								messages = newMessages;
-								break;
-							}
-						}
+						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
 					}
 				}
 			}
-			// TODO: Handle errors? E.g. no internet connection.
-			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-			SDL_RenderClear(renderer);
-			for (int i = 0; i < messages.size(); ++i) {
-				if (messages[i].r.y + messages[i].r.h < writeMessageBtnR.y) {
-					SDL_SetRenderDrawColor(renderer, 37, 37, 68, 0);
-					SDL_RenderFillRectF(renderer, &messages[i].r);
-					SDL_SetRenderDrawColor(renderer, 25, 25, 25, 0);
-					SDL_RenderDrawRectF(renderer, &messages[i].r);
-					messages[i].topicText.draw(renderer);
-					messages[i].senderNameText.draw(renderer);
-					messages[i].senderSurnameText.draw(renderer);
-					messages[i].dateText.draw(renderer);
+			sf::Packet sentPacket;
+			sentPacket << PacketType::ReceiveMessages << nameInputText.text << surnameInputText.text;
+			socket.send(sentPacket);
+			sf::Packet receivedPacket;
+			socket.receive(receivedPacket); // TODO: Do something on fail + put it on separate thread?
+			std::vector<Message> newMessages;
+			newMessages.push_back(Message());
+			{
+				int i = 0;
+				while (
+					receivedPacket >> newMessages.back().topicText.text
+					>> newMessages.back().senderNameText.text
+					>> newMessages.back().senderSurnameText.text
+					>> newMessages.back().dateText.text
+					>> newMessages.back().contentText.text
+					) {
+					newMessages.back().r.w = windowWidth;
+					newMessages.back().r.h = 20;
+					newMessages.back().r.x = 0;
+					newMessages.back().r.y = newMessages.back().r.h * i;
+
+					newMessages.back().topicText.dstR = newMessages.back().r;
+					newMessages.back().topicText.autoAdjustW = true;
+					newMessages.back().topicText.setText(renderer, robotoF, newMessages.back().topicText.text);
+					newMessages.back().topicText.dstR.w *= 0.3;
+
+					newMessages.back().dateText.dstR = newMessages.back().r;
+					newMessages.back().dateText.autoAdjustW = true;
+					newMessages.back().dateText.setText(renderer, robotoF, newMessages.back().dateText.text);
+					newMessages.back().dateText.dstR.w *= 0.3;
+					newMessages.back().dateText.dstR.x = windowWidth - newMessages.back().dateText.dstR.w - 3;
+
+					newMessages.back().senderSurnameText.dstR = newMessages.back().r;
+					newMessages.back().senderSurnameText.autoAdjustW = true;
+					newMessages.back().senderSurnameText.setText(renderer, robotoF, newMessages.back().senderSurnameText.text);
+					newMessages.back().senderSurnameText.dstR.w *= 0.3;
+					newMessages.back().senderSurnameText.dstR.x = newMessages.back().dateText.dstR.x - newMessages.back().senderSurnameText.dstR.w - 10;
+
+					newMessages.back().senderNameText.dstR = newMessages.back().r;
+					newMessages.back().senderNameText.autoAdjustW = true;
+					newMessages.back().senderNameText.setText(renderer, robotoF, newMessages.back().senderNameText.text);
+					newMessages.back().senderNameText.dstR.w *= 0.3;
+					newMessages.back().senderNameText.dstR.x = newMessages.back().senderSurnameText.dstR.x - newMessages.back().senderNameText.dstR.w - 10;
+
+					newMessages.back().contentText.dstR = newMessages.back().topicText.dstR;
+					newMessages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
+					newMessages.back().contentText.autoAdjustW = true;
+					newMessages.back().contentText.setText(renderer, robotoF, newMessages.back().contentText.text);
+					newMessages.back().contentText.dstR.w *= 0.3;
+
+					newMessages.push_back(Message());
+					++i;
 				}
 			}
-			SDL_RenderCopyF(renderer, writeMessageT, 0, &writeMessageBtnR);
+			newMessages.pop_back();
+			if (ml.messages.size() != newMessages.size()) {
+				ml.messages = newMessages;
+			}
+			else {
+				for (int i = 0; i < ml.messages.size(); ++i) {
+					if (ml.messages[i].topicText.text != newMessages[i].topicText.text ||
+						ml.messages[i].senderNameText.text != newMessages[i].senderNameText.text ||
+						ml.messages[i].senderSurnameText.text != newMessages[i].senderSurnameText.text ||
+						ml.messages[i].dateText.text != newMessages[i].dateText.text ||
+						ml.messages[i].contentText.text != newMessages[i].contentText.text) {
+						ml.messages = newMessages;
+						break;
+					}
+				}
+			}
+			{
+#if 0 // TODO: Replace sf::Http with Tcp ???
+				// TODO: Use more secure HTTP(s) -> curl
+				// TODO: Do this from time to time + do so that it won't block UI
+				std::stringstream ss;
+				ss << "operation=checkCalls" << "&name=" << nameInputText.text << "&surname=" << surnameInputText.text;
+				sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
+				sf::Http http("http://senderprogram.000webhostapp.com/");
+				sf::Http::Response response = http.sendRequest(request);
+				if (response.getStatus() == sf::Http::Response::Status::Ok) {
+					std::string body = response.getBody();
+					{
+						std::stringstream ss(body);
+						std::getline(ss, body, '\035');
+						std::getline(ss, body, '\035');
+					}
+					std::string status, callerName, callerSurname;
+					{
+						std::stringstream ss(body);
+						std::getline(ss, status, '\037');
+						std::getline(ss, callerName, '\037');
+						std::getline(ss, callerSurname, '\036');
+					}
+					if (status == "Pending") {
+						ml.hasPendingCall = true;
+						ml.callerNameAndSurnameText.setText(renderer, robotoF, callerName + " " + callerSurname, { 255,255,255 });
+					}
+				}
+				// TODO: Handle errors? E.g. no internet connection.
+#endif
+			}
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_RenderClear(renderer);
+			for (int i = 0; i < ml.messages.size(); ++i) {
+				if (ml.messages[i].r.y + ml.messages[i].r.h < ml.writeMessageBtnR.y) {
+					SDL_SetRenderDrawColor(renderer, 37, 37, 68, 0);
+					SDL_RenderFillRectF(renderer, &ml.messages[i].r);
+					SDL_SetRenderDrawColor(renderer, 25, 25, 25, 0);
+					SDL_RenderDrawRectF(renderer, &ml.messages[i].r);
+					ml.messages[i].topicText.draw(renderer);
+					ml.messages[i].senderNameText.draw(renderer);
+					ml.messages[i].senderSurnameText.draw(renderer);
+					ml.messages[i].dateText.draw(renderer);
+				}
+			}
+			SDL_RenderCopyF(renderer, ml.writeMessageT, 0, &ml.writeMessageBtnR);
+			SDL_RenderCopyF(renderer, ml.callT, 0, &ml.callBtnR);
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+			SDL_RenderFillRectF(renderer, &ml.nameR);
+			SDL_RenderFillRectF(renderer, &ml.surnameR);
+			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
+			if (ml.isNameSelected) {
+				SDL_RenderDrawRectF(renderer, &ml.nameR);
+			}
+			else {
+				SDL_RenderDrawRectF(renderer, &ml.surnameR);
+			}
+			ml.nameText.draw(renderer);
+			ml.surnameText.draw(renderer);
+			drawInBorders(ml.nameInputText, ml.nameR, renderer, robotoF);
+			drawInBorders(ml.surnameInputText, ml.surnameR, renderer, robotoF);
+			if (ml.hasPendingCall) {
+				SDL_RenderCopyF(renderer, ml.pickUpT, 0, &ml.pickUpBtnR);
+				ml.callerNameAndSurnameText.draw(renderer);
+			}
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageContent) {
@@ -913,7 +1224,7 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
-			topicText.setText(renderer, robotoF, messages[messageIndexToShow].topicText.text);
+			topicText.setText(renderer, robotoF, ml.messages[messageIndexToShow].topicText.text);
 			topicText.dstR.x = closeBtnR.x + closeBtnR.w + (windowWidth - closeBtnR.w) / 2 - topicText.dstR.w / 2;
 			topicText.dstR.y = closeBtnR.h / 2 - topicText.dstR.h / 2;
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
@@ -1049,7 +1360,7 @@ int main(int argc, char* argv[])
 						state = State::MessageList;
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						sendMessage(msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
+						sendMessage(socket, msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
 					}
 					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
 						msSelectedWidget = MsSelectedWidget::Name;
@@ -1167,6 +1478,9 @@ int main(int argc, char* argv[])
 			}
 			SDL_RenderCopyF(renderer, sendT, 0, &msSendBtnR);
 			SDL_RenderPresent(renderer);
+		}
+		else if (state == State::Call) {
+
 		}
 	}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)

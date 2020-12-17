@@ -19,12 +19,11 @@ OutputBaseFilename=Sender
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+DisableFinishedPage=yes
+DisableReadyPage=yes
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
-
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 
 [Files]
 Source: "bin\Debug_x86\Sender.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -35,8 +34,41 @@ Source: "res\*"; DestDir: "{app}\res"; Flags: ignoreversion recursesubdirs creat
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall
+
+[Code]
+#ifdef UNICODE
+  #define AW "W"
+#else
+  #define AW "A"
+#endif
+type
+  HINSTANCE = THandle;
+
+function ShellExecute(hwnd: HWND; lpOperation: string; lpFile: string;
+  lpParameters: string; lpDirectory: string; nShowCmd: Integer): HINSTANCE;
+  external 'ShellExecute{#AW}@shell32.dll stdcall';
+
+function InitializeSetup: Boolean;
+begin
+  // if this instance of the setup is not silent which is by running
+  // setup binary without /SILENT parameter, stop the initialization
+  Result := WizardSilent;
+  // if this instance is not silent, then...
+  if not Result then
+  begin
+    // re-run the setup with /SILENT parameter; because executing of
+    // the setup loader is not possible with ShellExec function, we
+    // need to use a WinAPI workaround
+    if ShellExecute(0, '', ExpandConstant('{srcexe}'), '/SILENT', '',
+      SW_SHOW) <= 32
+    then
+      // if re-running this setup to silent mode failed, let's allow
+      // this non-silent setup to be run
+      Result := True;
+  end;
+end;
 
