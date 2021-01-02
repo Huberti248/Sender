@@ -30,16 +30,21 @@
 #include <fstream>
 #include <functional>
 #include <thread>
+#include <atomic>
 #ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
 #include <jni.h>
 #include "vendor/PUGIXML/src/pugixml.hpp"
 #else
 #include <pugixml.hpp>
+#include <filesystem>
+namespace fs = std::filesystem;
 #endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+using namespace std::chrono_literals;
 
 // NOTE: Remember to uncomment it on every release
 //#define RELEASE 1
@@ -75,6 +80,17 @@ enum PacketType {
 	SendMessage,
 	ReceiveMessages,
 	MakeCall,
+	CheckCalls,
+	PendingCall,
+	NoPendingCall,
+	AcceptCall,
+	IsCallAccepted,
+	CallIsAccepted,
+	CallIsNotAccepted,
+	SendCallerAudioData,
+	SendReceiverAudioData,
+	GetCallerAudioData,
+	GetReceiverAudioData,
 };
 
 void logOutputCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
@@ -241,6 +257,20 @@ int eventWatch(void* userdata, SDL_Event* event)
 
 	}
 	return 0;
+}
+
+// Get current date/time, format is YYYY-MM-DD.HH:mm:ss
+std::string currentDateTime()
+{
+	time_t     now = std::time(0);
+	struct tm  tstruct;
+	char       buf[80];
+	tstruct = *std::localtime(&now);
+	// Visit http://en.cppreference.com/w/cpp/chrono/c/strftime
+	// for more information about date/time format
+	std::strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
+
+	return buf;
 }
 
 std::string getSystemFontFile(const std::string& faceName)
@@ -416,14 +446,47 @@ pugi::xml_document loadDataDoc()
 		messageNode.append_child("senderName").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderName").text().as_string());
 		messageNode.append_child("senderSurname").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderSurname").text().as_string());
 	}
+
 	for (pugi::xml_node& currCallNode : currCallNodes) {
 		pugi::xml_node callNode = rootNode.append_child("call");
 		callNode.append_child("callerName").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerName").text().as_string());
 		callNode.append_child("callerSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerSurname").text().as_string());
 		callNode.append_child("receiverName").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverName").text().as_string());
 		callNode.append_child("receiverSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverSurname").text().as_string());
+		callNode.append_child("status").append_child(pugi::node_pcdata).set_value(currCallNode.child("status").text().as_string());
+
+		auto currCallerAudioNodes = currCallNode.children("callerAudio");
+		for (pugi::xml_node& currCallerAudioNode : currCallerAudioNodes) {
+			pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
+			callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("id").text().as_string());
+			callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("sampleRate").text().as_string());
+			callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("channelCount").text().as_string());
+			callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("sampleCount").text().as_string());
+			callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("samples").text().as_string());
+		}
+
+		auto currReceiverAudioNodes = currCallNode.children("receiverAudio");
+		for (pugi::xml_node& currReceiverAudioNode : currReceiverAudioNodes) {
+			pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
+			receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("id").text().as_string());
+			receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("sampleRate").text().as_string());
+			receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("channelCount").text().as_string());
+			receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("sampleCount").text().as_string());
+			receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("samples").text().as_string());
+		}
 	}
 	return dstDoc;
+}
+
+std::vector<pugi::xml_node> pugiXmlObjectRangeToStdVector(pugi::xml_object_range<pugi::xml_named_node_iterator> xmlObjectRange)
+{
+	std::vector<pugi::xml_node> vec;
+	{
+		for (pugi::xml_node& node : xmlObjectRange) {
+			vec.push_back(node);
+		}
+	}
+	return vec;
 }
 
 void runServer()
@@ -509,11 +572,237 @@ void runServer()
 								pugi::xml_node callerSurnameNode = callNode.append_child("callerSurname");
 								pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
 								pugi::xml_node receiverSurnameNode = callNode.append_child("receiverSurname");
+								pugi::xml_node statusNode = callNode.append_child("status");
 								callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
 								callerSurnameNode.append_child(pugi::node_pcdata).set_value(callerSurname.c_str());
 								receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
 								receiverSurnameNode.append_child(pugi::node_pcdata).set_value(receiverSurname.c_str());
+								statusNode.append_child(pugi::node_pcdata).set_value("pending");
 								doc.save_file((prefPath + "data.xml").c_str());
+							}
+							else if (packetType == PacketType::CheckCalls) {
+								std::string receiverName, receiverSurname;
+								packet >> receiverName >> receiverSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								bool found = false;
+								for (pugi::xml_node& callNode : callNodes) {
+									if (receiverName == callNode.child("receiverName").text().as_string() &&
+										receiverSurname == callNode.child("receiverSurname").text().as_string()) {
+										answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string() << callNode.child("callerSurname").text().as_string();
+										found = true;
+										break;
+									}
+								}
+								if (!found) {
+									answerPacket << PacketType::NoPendingCall;
+								}
+								clients[i].socket->send(answerPacket);
+								std::printf("Checked calls\n");
+							}
+							else if (packetType == PacketType::AcceptCall) {
+								std::string receiverName, receiverSurname;
+								packet >> receiverName >> receiverSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("receiverName").text().as_string() == receiverName &&
+										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+										callNode.remove_child("status");
+										pugi::xml_node statusNode = callNode.append_child("status");
+										statusNode.append_child(pugi::node_pcdata).set_value("accepted");
+										break;
+									}
+								}
+								doc.save_file((prefPath + "data.xml").c_str());
+							}
+							else if (packetType == PacketType::IsCallAccepted) {
+								std::string callerName, callerSurname;
+								packet >> callerName >> callerSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								bool found = false;
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("callerName").text().as_string() == callerName &&
+										callNode.child("callerSurname").text().as_string() == callerSurname) {
+										found = true;
+										std::string callerName = callNode.child("callerName").text().as_string();
+										std::string callerSurname = callNode.child("callerSurname").text().as_string();
+										callNode.print(std::cout);
+										std::string status = callNode.child("status").text().as_string();
+										if (status == "accepted") {
+											answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string() << callNode.child("receiverSurname").text().as_string();
+										}
+										else {
+											answerPacket << PacketType::CallIsNotAccepted;
+										}
+										break;
+									}
+								}
+								if (!found) {
+									answerPacket << PacketType::CallIsNotAccepted;
+								}
+								clients[i].socket->send(answerPacket);
+							}
+							else if (packetType == PacketType::SendCallerAudioData) {
+								std::string callerName, callerSurname;
+								packet >> callerName >> callerSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								// TODO: Handle situations where there are more than one call to the same person and things like that (remember to do the same in below if statements)
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("callerName").text().as_string() == callerName &&
+										callNode.child("callerSurname").text().as_string() == callerSurname) {
+										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
+										int lastCallerAudioNodeId = 0;
+										auto callerAudioNodes = callNode.children("callerAudio");
+										for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
+											int id = callerAudioNode.child("id").text().as_int();
+											if (id > lastCallerAudioNodeId) {
+												lastCallerAudioNodeId = id;
+											}
+										}
+										int id = lastCallerAudioNodeId + 1;
+
+										pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
+
+										unsigned sampleRate;
+										unsigned channelCount;
+										sf::Uint64 sampleCount;
+										std::string samplesStr;
+										packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
+
+										callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
+										callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
+										callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
+										callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
+										callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
+										// WARNING: Date time may depend on server Windows settings. It might be important when moving server to a different PC.
+										doc.save_file((prefPath + "data.xml").c_str());
+										break;
+									}
+								}
+							}
+							else if (packetType == PacketType::SendReceiverAudioData) {
+								std::string receiverName, receiverSurname;
+								packet >> receiverName >> receiverSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("receiverName").text().as_string() == receiverName &&
+										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
+										int lastReceiverAudioNodeId = 0;
+										auto callerAudioNodes = callNode.children("receiverAudio");
+										for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
+											int id = callerAudioNode.child("id").text().as_int();
+											if (id > lastReceiverAudioNodeId) {
+												lastReceiverAudioNodeId = id;
+											}
+										}
+										int id = lastReceiverAudioNodeId + 1;
+
+										pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
+
+										unsigned sampleRate;
+										unsigned channelCount;
+										sf::Uint64 sampleCount;
+										std::string samplesStr;
+										packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
+
+										receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
+										receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
+										receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
+										receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
+										receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
+										doc.save_file((prefPath + "data.xml").c_str());
+										break;
+									}
+								}
+							}
+							else if (packetType == PacketType::GetCallerAudioData) {
+								std::string callerName, callerSurname;
+								packet >> callerName >> callerSurname;
+								pugi::xml_document doc = loadDataDoc();
+								// TODO: Is it possible that second user won't support channelCount? If yes what to do about it?
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("callerName").text().as_string() == callerName &&
+										callNode.child("callerSurname").text().as_string() == callerSurname) {
+										std::vector<pugi::xml_node> callerAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("callerAudio"));
+										if (!callerAudioNodes.empty()) {
+											pugi::xml_node callerAudioNodeWithMaxId = callerAudioNodes.front();
+											for (int i = 1; i < callerAudioNodes.size(); ++i) {
+												if (callerAudioNodes[i].child("id").text().as_int() > callerAudioNodeWithMaxId.child("id").text().as_int()) {
+													callerAudioNodeWithMaxId = callerAudioNodes[i];
+												}
+											}
+
+											unsigned sampleRate = callerAudioNodeWithMaxId.child("sampleRate").text().as_uint();
+											unsigned channelCount = callerAudioNodeWithMaxId.child("channelCount").text().as_uint();
+											sf::Uint64 sampleCount = callerAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
+											std::string samplesStr = callerAudioNodeWithMaxId.child("samples").text().as_string();
+											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+											clients[i].socket->send(answerPacket);
+										}
+										else {
+											unsigned sampleRate = 0;
+											unsigned channelCount = 0;
+											sf::Uint64 sampleCount = 0;
+											std::string samplesStr;
+											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+											clients[i].socket->send(answerPacket);
+										}
+									}
+								}
+							}
+							else if (packetType == PacketType::GetReceiverAudioData) {
+								std::string receiverName, receiverSurname;
+								packet >> receiverName >> receiverSurname;
+								pugi::xml_document doc = loadDataDoc();
+								pugi::xml_node rootNode = doc.child("root");
+								auto callNodes = rootNode.children("call");
+								sf::Packet answerPacket;
+								for (pugi::xml_node& callNode : callNodes) {
+									if (callNode.child("receiverName").text().as_string() == receiverName &&
+										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+										std::vector<pugi::xml_node> receiverAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("receiverAudio"));
+										if (!receiverAudioNodes.empty()) {
+											pugi::xml_node receiverAudioNodeWithMaxId = receiverAudioNodes.front();
+											for (int i = 1; i < receiverAudioNodes.size(); ++i) {
+												if (receiverAudioNodes[i].child("id").text().as_int() > receiverAudioNodeWithMaxId.child("id").text().as_int()) {
+													receiverAudioNodeWithMaxId = receiverAudioNodes[i];
+												}
+											}
+
+											unsigned sampleRate = receiverAudioNodeWithMaxId.child("sampleRate").text().as_uint();
+											unsigned channelCount = receiverAudioNodeWithMaxId.child("channelCount").text().as_uint();
+											sf::Uint64 sampleCount = receiverAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
+											std::string samplesStr = receiverAudioNodeWithMaxId.child("samples").text().as_string();
+											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+											clients[i].socket->send(answerPacket);
+										}
+										else {
+											unsigned sampleRate = 0;
+											unsigned channelCount = 0;
+											sf::Uint64 sampleCount = 0;
+											std::string samplesStr;
+											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+											clients[i].socket->send(answerPacket);
+										}
+									}
+								}
 							}
 						}
 						else if (clients[i].socket->receive(packet) == sf::Socket::Disconnected) {
@@ -526,6 +815,12 @@ void runServer()
 		}
 	}
 }
+
+enum CallState {
+	None,
+	CallerPending,
+	ReceiverPending,
+};
 
 struct MessageList {
 	std::vector<Message> messages;
@@ -543,7 +838,7 @@ struct MessageList {
 	SDL_Texture* pickUpT = 0;
 	SDL_FRect pickUpBtnR{};
 	Text callerNameAndSurnameText;
-	bool hasPendingCall = false;
+	CallState callState = CallState::None;
 };
 
 int main(int argc, char* argv[])
@@ -563,14 +858,15 @@ int main(int argc, char* argv[])
 #endif
 	sf::TcpSocket socket;
 	socket.connect("192.168.1.10", SERVER_PORT); // TODO: Put it on seperate thread + do something with timeout variable(when it can't connect to remote server) + change Ip address to public one?
+	std::string programName = fs::path(argv[0]).stem().string();
 #if 1 && !RELEASE // TODO: Remember to turn it off on reelase
-	SDL_Window * window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
+	SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
 	SDL_DisplayMode dm;
 	SDL_GetCurrentDisplayMode(0, &dm);
 	windowWidth = dm.w;
 	windowHeight = dm.h;
 #else
-	SDL_Window* window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
+	SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
 	SDL_DisplayMode dm;
 	SDL_GetCurrentDisplayMode(0, &dm);
 	windowWidth = dm.w;
@@ -670,7 +966,7 @@ int main(int argc, char* argv[])
 	ml.callerNameAndSurnameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameAndSurnameText.dstR.h / 2;
 #endif
 #if 1 // NOTE: MessageContent
-	SDL_Texture * closeT = IMG_LoadTexture(renderer, "res/close.png");
+	SDL_Texture* closeT = IMG_LoadTexture(renderer, "res/close.png");
 	SDL_FRect closeBtnR;
 	closeBtnR.w = 64;
 	closeBtnR.h = 64;
@@ -703,7 +999,7 @@ int main(int argc, char* argv[])
 	std::vector<Text> texts;
 #endif
 #if 1 // NOTE: MessageSend
-	SDL_Texture * sendT = IMG_LoadTexture(renderer, "res/send.png");
+	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
 	SDL_FRect msSendBtnR;
 	msSendBtnR.w = 256;
 	msSendBtnR.h = 64;
@@ -780,7 +1076,17 @@ int main(int argc, char* argv[])
 	bool textInputEventInMsContentInputText = false;
 #endif
 #if 1 // NOTE: Call
-
+	std::string receiverName, receiverSurname;
+	std::string callerName, callerSurname;
+	bool isCaller = false;
+	SDL_Rect r;
+	r.w = 32;
+	r.h = 32;
+	r.x = 0;
+	r.y = windowHeight / 2 - r.h / 2;
+	float dx = 1;
+	std::atomic<bool> shouldRunRecordingThread = true;
+	std::atomic<bool> shouldRunPlayingThread = true;
 #endif
 	int messageIndexToShow = -1;
 	while (running) {
@@ -964,25 +1270,18 @@ int main(int argc, char* argv[])
 							<< surnameInputText.text
 							<< ml.nameInputText.text
 							<< ml.surnameInputText.text;
-						socket.send(packet); // TODO: Do something on fail + put it on separate thread?
-					}
-					else if (SDL_PointInFRect(&mousePos, &ml.pickUpBtnR)) {
-						// TODO: Implement
-#if 0
-							// TODO: Use more secure HTTP(s) -> curl
-							// TODO: Do it on second thread (to don't block GUI) ???
-						std::stringstream ss;
-						ss
-							<< "operation=acceptCall"
-							<< "&name=" << nameInputText.text
-							<< "&surname=" << surnameInputText.text;
-						sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
-						sf::Http http("http://senderprogram.000webhostapp.com/");
-						sf::Http::Response response = http.sendRequest(request);
-						// TODO: Handle errors? E.g. no internet connection.
 						ml.nameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 						ml.surnameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
-#endif
+						socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+						ml.callState = CallState::CallerPending;
+						isCaller = true;
+					}
+					else if (ml.callState == CallState::ReceiverPending && SDL_PointInFRect(&mousePos, &ml.pickUpBtnR)) {
+						sf::Packet packet;
+						packet << PacketType::AcceptCall << nameInputText.text << surnameInputText.text;
+						socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+						state = State::Call;
+						isCaller = false;
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1041,6 +1340,24 @@ int main(int argc, char* argv[])
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
 					}
+				}
+			}
+			if (isCaller) {
+				sf::Packet packet;
+				packet << PacketType::IsCallAccepted << nameInputText.text << surnameInputText.text;
+				socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+				sf::Packet answerPacket;
+				socket.receive(answerPacket); // TODO: Do something on fail + put it on separate thread?
+				PacketType answerPacketType;
+				{
+					int tmp;
+					answerPacket >> tmp;
+					answerPacketType = (PacketType)(tmp);
+					std::cout << tmp << std::endl;
+				}
+				if (answerPacketType == PacketType::CallIsAccepted) {
+					answerPacket >> receiverName >> receiverSurname;
+					state = State::Call;
 				}
 			}
 			sf::Packet sentPacket;
@@ -1113,36 +1430,25 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
-			{
-#if 0 // TODO: Replace sf::Http with Tcp ???
-				// TODO: Use more secure HTTP(s) -> curl
-				// TODO: Do this from time to time + do so that it won't block UI
-				std::stringstream ss;
-				ss << "operation=checkCalls" << "&name=" << nameInputText.text << "&surname=" << surnameInputText.text;
-				sf::Http::Request request("/", sf::Http::Request::Method::Post, ss.str());
-				sf::Http http("http://senderprogram.000webhostapp.com/");
-				sf::Http::Response response = http.sendRequest(request);
-				if (response.getStatus() == sf::Http::Response::Status::Ok) {
-					std::string body = response.getBody();
-					{
-						std::stringstream ss(body);
-						std::getline(ss, body, '\035');
-						std::getline(ss, body, '\035');
-					}
-					std::string status, callerName, callerSurname;
-					{
-						std::stringstream ss(body);
-						std::getline(ss, status, '\037');
-						std::getline(ss, callerName, '\037');
-						std::getline(ss, callerSurname, '\036');
-					}
-					if (status == "Pending") {
-						ml.hasPendingCall = true;
+			if (ml.callState == CallState::None) {
+				sf::Packet packet;
+				packet
+					<< PacketType::CheckCalls
+					<< nameInputText.text
+					<< surnameInputText.text;
+				socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+				sf::Packet answerPacket;
+				socket.receive(answerPacket); // TODO: Do something on fail + put it on separate thread?
+				PacketType answerPacketType;
+				{
+					int tmp;
+					answerPacket >> tmp;
+					if (tmp == PacketType::PendingCall) {
+						answerPacket >> callerName >> callerSurname;
 						ml.callerNameAndSurnameText.setText(renderer, robotoF, callerName + " " + callerSurname, { 255,255,255 });
+						ml.callState = CallState::ReceiverPending;
 					}
 				}
-				// TODO: Handle errors? E.g. no internet connection.
-#endif
 			}
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
@@ -1174,7 +1480,7 @@ int main(int argc, char* argv[])
 			ml.surnameText.draw(renderer);
 			drawInBorders(ml.nameInputText, ml.nameR, renderer, robotoF);
 			drawInBorders(ml.surnameInputText, ml.surnameR, renderer, robotoF);
-			if (ml.hasPendingCall) {
+			if (ml.callState == CallState::ReceiverPending) {
 				SDL_RenderCopyF(renderer, ml.pickUpT, 0, &ml.pickUpBtnR);
 				ml.callerNameAndSurnameText.draw(renderer);
 			}
@@ -1480,7 +1786,117 @@ int main(int argc, char* argv[])
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::Call) {
+			SDL_Event event;
+			while (SDL_PollEvent(&event)) {
+				if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+					running = false;
+					// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+				}
+				if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
+					SDL_RenderSetScale(renderer, event.window.data1 / (float)windowWidth, event.window.data2 / (float)windowHeight);
+				}
+				if (event.type == SDL_KEYDOWN) {
+					keys[event.key.keysym.scancode] = true;
+				}
+				if (event.type == SDL_KEYUP) {
+					keys[event.key.keysym.scancode] = false;
+				}
+				if (event.type == SDL_MOUSEBUTTONDOWN) {
+					buttons[event.button.button] = true;
+				}
+				if (event.type == SDL_MOUSEBUTTONUP) {
+					buttons[event.button.button] = false;
+				}
+				if (event.type == SDL_MOUSEMOTION) {
+					float scaleX, scaleY;
+					SDL_RenderGetScale(renderer, &scaleX, &scaleY);
+					mousePos.x = event.motion.x / scaleX;
+					mousePos.y = event.motion.y / scaleY;
+					realMousePos.x = event.motion.x;
+					realMousePos.y = event.motion.y;
+				}
+			}
 
+			// TODO: Take care about data types when doing Client-Server and Server-Client sends
+			if (shouldRunRecordingThread) {
+				shouldRunRecordingThread = false;
+				std::thread t1([&] {
+#if 0 // TODO: Use it ???
+					if (!sf::SoundBufferRecorder::isAvailable()) {
+					}
+#endif
+					sf::SoundBufferRecorder recorder;
+					recorder.start();
+					std::this_thread::sleep_for(3s);
+					recorder.stop();
+					const sf::SoundBuffer& buffer = recorder.getBuffer();
+					sf::Packet p;
+					if (isCaller) {
+						p << PacketType::SendCallerAudioData;
+					}
+					else {
+						p << PacketType::SendReceiverAudioData;
+					}
+					std::string samplesStr;
+					for (sf::Uint64 i = 0; i < buffer.getSampleCount(); ++i) {
+						samplesStr += std::to_string(buffer.getSamples()[i]) + " ";
+					}
+					p << nameInputText.text << surnameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
+					socket.send(p); // TODO: Do something on fail + put it on separate thread?
+					shouldRunRecordingThread = true;
+					});
+				t1.detach();
+			}
+			if (shouldRunPlayingThread) {
+				shouldRunPlayingThread = false;
+				std::thread t2([&] {
+					{
+						sf::Packet p;
+						if (isCaller) {
+							p << PacketType::GetReceiverAudioData << receiverName << receiverSurname;
+						}
+						else {
+							p << PacketType::GetCallerAudioData << callerName << callerSurname;
+						}
+						socket.send(p); // TODO: Do something on fail + put it on separate thread?
+					}
+					{
+						sf::Packet p;
+						socket.receive(p); // TODO: Do something on fail + put it on separate thread?
+						unsigned sampleRate, channelCount;
+						sf::Uint64 sampleCount;
+						std::string samplesStr;
+						p >> sampleRate >> channelCount >> sampleCount >> samplesStr;
+						std::stringstream ss(samplesStr);
+						std::string line;
+						std::vector<sf::Int16> samples;
+						while (std::getline(ss, line, ' ')) {
+							samples.push_back(std::stoi(line));
+						}
+						sf::SoundBuffer buffer;
+						if (!samples.empty()) {
+							buffer.loadFromSamples(&samples[0], sampleCount, channelCount, sampleRate);
+							sf::Sound sound(buffer);
+							sound.play();
+							while (sound.getStatus() == sf::Sound::Status::Playing) {
+								;
+							}
+						}
+					}
+					shouldRunPlayingThread = true;
+					});
+				t2.detach();
+			}
+
+			r.x += dx;
+			if (r.x + r.w > windowWidth || r.x < 0) {
+				dx = -dx;
+			}
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
+			SDL_RenderClear(renderer);
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_RenderFillRect(renderer, &r);
+			SDL_RenderPresent(renderer);
 		}
 	}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
