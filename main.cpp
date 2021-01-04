@@ -1327,6 +1327,7 @@ int main(int argc, char* argv[])
 						sf::Packet packet;
 						packet << PacketType::AcceptCall << nameInputText.text << surnameInputText.text;
 						socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+						ml.isNameSelected = true;
 						state = State::Call;
 						isCaller = false;
 						receiverName = nameInputText.text;
@@ -1407,6 +1408,7 @@ int main(int argc, char* argv[])
 					answerPacket >> receiverName >> receiverSurname;
 					callerName = nameInputText.text;
 					callerSurname = surnameInputText.text;
+					ml.isNameSelected = true;
 					state = State::Call;
 				}
 			}
@@ -1974,10 +1976,10 @@ int main(int argc, char* argv[])
 							}
 						}
 						shouldRunPlayingThread = true;
-						});
+			});
 					t2.detach();
-				}
-			}
+		}
+	}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -1989,8 +1991,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-		}
-	}
+}
+			}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-}
+		}
