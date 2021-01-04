@@ -374,7 +374,6 @@ float getValueFromValueAndPercent(float value, float percent)
 
 enum MsSelectedWidget {
 	Name,
-	Surname,
 	Topic,
 	Content,
 
@@ -397,21 +396,18 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
-void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msSurnameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText, Text& surnameInputText,
+void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
 	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font)
 {
 	sf::Packet packet;
 	packet
 		<< PacketType::SendMessage
 		<< msNameInputText.text
-		<< msSurnameInputText.text
 		<< msTopicInputText.text
 		<< msContentInputText.text
-		<< nameInputText.text
-		<< surnameInputText.text;
+		<< nameInputText.text;
 	socket.send(packet); // TODO: Do something on fail + put it on separate thread?
 	msNameInputText.setText(renderer, font, "");
-	msSurnameInputText.setText(renderer, font, "");
 	msTopicInputText.setText(renderer, font, "");
 	msContentInputText.setText(renderer, font, "");
 	msSelectedWidget = MsSelectedWidget::Name;
@@ -524,12 +520,11 @@ void runServer()
 							}
 							if (packetType == PacketType::SendMessage) {
 								std::string msNameInputText;
-								std::string msSurnameInputText;
 								std::string msTopicInputText;
 								std::string msContentInputText;
 								std::string nameInputText;
 								std::string surnameInputText;
-								packet >> msNameInputText >> msSurnameInputText >> msTopicInputText >> msContentInputText >> nameInputText >> surnameInputText;
+								packet >> msNameInputText >> msTopicInputText >> msContentInputText >> nameInputText >> surnameInputText;
 								pugi::xml_document doc = loadDataDoc();
 								pugi::xml_node rootNode = doc.child("root");
 								pugi::xml_node messageNode = rootNode.append_child("message");
@@ -540,7 +535,6 @@ void runServer()
 								pugi::xml_node senderNameNode = messageNode.append_child("senderName");
 								pugi::xml_node senderSurnameNode = messageNode.append_child("senderSurname");
 								receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
-								receiverSurnameNode.append_child(pugi::node_pcdata).set_value(msSurnameInputText.c_str());
 								topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
 								contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
 								senderNameNode.append_child(pugi::node_pcdata).set_value(nameInputText.c_str());
@@ -869,13 +863,10 @@ struct MessageList {
 	Text nameText;
 	SDL_FRect nameR{};
 	Text nameInputText;
-	Text surnameText;
-	SDL_FRect surnameR{};
-	Text surnameInputText;
 	bool isNameSelected = true;
 	SDL_Texture* pickUpT = 0;
 	SDL_FRect pickUpBtnR{};
-	Text callerNameAndSurnameText;
+	Text callerNameText;
 	CallState callState = CallState::None;
 };
 
@@ -919,37 +910,23 @@ int main(int argc, char* argv[])
 	bool running = true;
 	State state = State::LoginAndRegister;
 #if 1 // NOTE: LoginAndRegister
-	Text nameText;
-	nameText.setText(renderer, robotoF, u8"Imię");
-	nameText.dstR.w = 40;
-	nameText.dstR.h = 20;
-	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
-	nameText.dstR.y = 300;
 	SDL_FRect nameR;
 	nameR.w = 200;
 	nameR.h = 30;
 	nameR.x = windowWidth / 2 - nameR.w / 2;
-	nameR.y = nameText.dstR.y + nameText.dstR.h + 6;
+	nameR.y = windowHeight / 2;
+	Text nameText;
+	nameText.setText(renderer, robotoF, u8"Nazwa");
+	nameText.dstR.w = 60;
+	nameText.dstR.h = 20;
+	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
+	nameText.dstR.y = nameR.y- nameText.dstR.h;
 	Text nameInputText;
 	nameInputText.setText(renderer, robotoF, "");
 	nameInputText.dstR = nameR;
 	nameInputText.dstR.x += 3;
 	nameInputText.autoAdjustW = true;
 	nameInputText.wMultiplier = 0.5;
-	Text surnameText;
-	surnameText.setText(renderer, robotoF, "Nazwisko");
-	surnameText.dstR.w = 80;
-	surnameText.dstR.h = 20;
-	surnameText.dstR.x = windowWidth / 2 - surnameText.dstR.w / 2;
-	surnameText.dstR.y = nameR.y + nameR.h + 15;
-	SDL_FRect surnameR = nameR;
-	surnameR.y = surnameText.dstR.y + surnameText.dstR.h + 6;
-	Text surnameInputText;
-	surnameInputText.setText(renderer, robotoF, "");
-	surnameInputText.dstR = surnameR;
-	surnameInputText.dstR.x += 3;
-	surnameInputText.autoAdjustW = true;
-	surnameInputText.wMultiplier = 0.5;
 	bool isNameSelected = true;
 #endif
 #if 1 // NOTE: MessageList
@@ -968,40 +945,26 @@ int main(int argc, char* argv[])
 	ml.nameInputText.dstR.x += 3;
 	ml.nameInputText.autoAdjustW = true;
 	ml.nameInputText.wMultiplier = 0.5;
-	ml.nameText.setText(renderer, robotoF, u8"Imię");
+	ml.nameText.setText(renderer, robotoF, u8"Nazwa");
 	ml.nameText.dstR.w = 40;
 	ml.nameText.dstR.h = 20;
 	ml.nameText.dstR.x = ml.nameR.x + ml.nameR.w / 2 - ml.nameText.dstR.w / 2;
 	ml.nameText.dstR.y = ml.writeMessageBtnR.y;
-	ml.surnameR.w = 200;
-	ml.surnameR.h = 30;
-	ml.surnameR.x = ml.nameR.x + ml.nameR.w + 5;
-	ml.surnameR.y = ml.writeMessageBtnR.y + ml.writeMessageBtnR.h / 2;
-	ml.surnameInputText.setText(renderer, robotoF, "");
-	ml.surnameInputText.dstR = ml.surnameR;
-	ml.surnameInputText.dstR.x += 3;
-	ml.surnameInputText.autoAdjustW = true;
-	ml.surnameInputText.wMultiplier = 0.5;
-	ml.surnameText.setText(renderer, robotoF, u8"Nazwisko");
-	ml.surnameText.dstR.w = 80;
-	ml.surnameText.dstR.h = 20;
-	ml.surnameText.dstR.x = ml.surnameR.x + ml.surnameR.w / 2 - ml.surnameText.dstR.w / 2;
-	ml.surnameText.dstR.y = ml.writeMessageBtnR.y;
 	ml.callT = IMG_LoadTexture(renderer, "res/call.png");
 	ml.callBtnR.w = 256;
 	ml.callBtnR.h = 60;
-	ml.callBtnR.x = ml.surnameR.x + ml.surnameR.w;
+	ml.callBtnR.x = ml.nameR.x + ml.nameR.w;
 	ml.callBtnR.y = windowHeight - ml.callBtnR.h;
 	ml.pickUpT = IMG_LoadTexture(renderer, "res/pickUp.png");
 	ml.pickUpBtnR.w = 256;
 	ml.pickUpBtnR.h = 60;
 	ml.pickUpBtnR.x = ml.callBtnR.x + ml.callBtnR.w + 5;
 	ml.pickUpBtnR.y = windowHeight - ml.pickUpBtnR.h;
-	ml.callerNameAndSurnameText.autoAdjustW = true;
-	ml.callerNameAndSurnameText.wMultiplier = 0.3;
-	ml.callerNameAndSurnameText.dstR.h = 20;
-	ml.callerNameAndSurnameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
-	ml.callerNameAndSurnameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameAndSurnameText.dstR.h / 2;
+	ml.callerNameText.autoAdjustW = true;
+	ml.callerNameText.wMultiplier = 0.3;
+	ml.callerNameText.dstR.h = 20;
+	ml.callerNameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
+	ml.callerNameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameText.dstR.h / 2;
 	std::string callerName, callerSurname;
 	std::string receiverName, receiverSurname;
 #endif
@@ -1047,13 +1010,13 @@ int main(int argc, char* argv[])
 	msSendBtnR.y = windowHeight - msSendBtnR.h;
 	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
 	SDL_FRect msNameR;
-	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 100.f / 3.f);
+	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
 	msNameR.h = getValueFromValueAndPercent(closeBtnR.h, 70);
 	msNameR.x = closeBtnR.x + closeBtnR.w;
 	msNameR.y = 0;
 	Text msNameText;
-	msNameText.setText(renderer, robotoF, u8"Imię", { TEXT_COLOR });
-	msNameText.dstR.w = 40;
+	msNameText.setText(renderer, robotoF, u8"Nazwa", { TEXT_COLOR });
+	msNameText.dstR.w = 60;
 	msNameText.dstR.h = 20;
 	msNameText.dstR.x = msNameR.x + msNameR.w / 2 - msNameText.dstR.w / 2;
 	msNameText.dstR.y = 0;
@@ -1066,25 +1029,8 @@ int main(int argc, char* argv[])
 	msNameInputText.dstR.y = msNameR.y + msNameR.h / 2 - msNameInputText.dstR.h / 2;
 	msNameInputText.autoAdjustW = true;
 	msNameInputText.wMultiplier = 0.3;
-	SDL_FRect msSurnameR = msNameR;
-	msSurnameR.x = msNameR.x + msNameR.w;
-	Text msSurnameInputText;
-	msSurnameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
-	msSurnameInputText.dstR = msSurnameR;
-	msSurnameInputText.dstR.h *= 0.5;
-	msSurnameInputText.dstR.x += 3;
-	msSurnameInputText.dstR.y = msSurnameR.y + msSurnameR.h / 2 - msSurnameInputText.dstR.h / 2;
-	msSurnameInputText.autoAdjustW = true;
-	msSurnameInputText.wMultiplier = 0.3;
-	Text msSurnameText;
-	msSurnameText.setText(renderer, robotoF, "Nazwisko", { TEXT_COLOR });
-	msSurnameText.dstR.w = 80;
-	msSurnameText.dstR.h = 20;
-	msSurnameText.dstR.x = msSurnameInputText.dstR.x + msSurnameInputText.dstR.w / 2 - msSurnameText.dstR.w / 2;
-	msSurnameText.dstR.y = msNameText.dstR.y;
-	msSurnameText.autoAdjustW = true;
-	SDL_FRect msTopicR = msSurnameR;
-	msTopicR.x = msSurnameR.x + msSurnameR.w;
+	SDL_FRect msTopicR = msNameR;
+	msTopicR.x = msNameR.x + msNameR.w;
 	Text msTopicText;
 	msTopicText.setText(renderer, robotoF, "Temat", { TEXT_COLOR });
 	msTopicText.dstR.w = 60;
@@ -1159,12 +1105,6 @@ int main(int argc, char* argv[])
 								nameInputText.setText(renderer, robotoF, nameInputText.text, { TEXT_COLOR });
 							}
 						}
-						else {
-							if (!surnameInputText.text.empty()) {
-								surnameInputText.text.pop_back();
-								surnameInputText.setText(renderer, robotoF, surnameInputText.text, { TEXT_COLOR });
-							}
-						}
 					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
 						state = State::MessageList;
@@ -1177,9 +1117,6 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &nameR)) {
 						isNameSelected = true;
-					}
-					else if (SDL_PointInFRect(&mousePos, &surnameR)) {
-						isNameSelected = false;
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1197,27 +1134,18 @@ int main(int argc, char* argv[])
 					if (isNameSelected) {
 						nameInputText.setText(renderer, robotoF, nameInputText.text + event.text.text, { TEXT_COLOR });
 					}
-					else {
-						surnameInputText.setText(renderer, robotoF, surnameInputText.text + event.text.text, { TEXT_COLOR });
-					}
 				}
 			}
 			SDL_SetRenderDrawColor(renderer, BG_COLOR);
 			SDL_RenderClear(renderer);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 			SDL_RenderFillRectF(renderer, &nameR);
-			SDL_RenderFillRectF(renderer, &surnameR);
 			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
 			if (isNameSelected) {
 				SDL_RenderDrawRectF(renderer, &nameR);
 			}
-			else {
-				SDL_RenderDrawRectF(renderer, &surnameR);
-			}
 			nameText.draw(renderer);
-			surnameText.draw(renderer);
 			drawInBorders(nameInputText, nameR, renderer, robotoF);
-			drawInBorders(surnameInputText, surnameR, renderer, robotoF);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageList) {
@@ -1421,7 +1349,7 @@ int main(int argc, char* argv[])
 			}
 #endif
 			sf::Packet sentPacket;
-			sentPacket << PacketType::ReceiveMessages << nameInputText.text << surnameInputText.text;
+			sentPacket << PacketType::ReceiveMessages << nameInputText.text;
 			socket.send(sentPacket);
 			sf::Packet receivedPacket;
 			socket.receive(receivedPacket); // TODO: Do something on fail + put it on separate thread?
@@ -1658,19 +1586,6 @@ int main(int argc, char* argv[])
 						}
 					}
 				}
-				else if (msSelectedWidget == MsSelectedWidget::Surname) {
-					if (event.type == SDL_TEXTINPUT) {
-						msSurnameInputText.setText(renderer, robotoF, msSurnameInputText.text + event.text.text, { TEXT_COLOR });
-					}
-					if (event.type == SDL_KEYDOWN) {
-						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-							if (!msSurnameInputText.text.empty()) {
-								msSurnameInputText.text.pop_back();
-								msSurnameInputText.setText(renderer, robotoF, msSurnameInputText.text, { TEXT_COLOR });
-							}
-						}
-					}
-				}
 				else if (msSelectedWidget == MsSelectedWidget::Topic) {
 					if (event.type == SDL_TEXTINPUT) {
 						msTopicInputText.setText(renderer, robotoF, msTopicInputText.text + event.text.text, { TEXT_COLOR });
@@ -1730,13 +1645,10 @@ int main(int argc, char* argv[])
 						state = State::MessageList;
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						sendMessage(socket, msNameInputText, msSurnameInputText, msTopicInputText, msContentInputText, nameInputText, surnameInputText, msSelectedWidget, renderer, robotoF);
+						sendMessage(socket, msNameInputText, msTopicInputText, msContentInputText, nameInputText, msSelectedWidget, renderer, robotoF);
 					}
 					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
 						msSelectedWidget = MsSelectedWidget::Name;
-					}
-					else if (SDL_PointInFRect(&mousePos, &msSurnameR)) {
-						msSelectedWidget = MsSelectedWidget::Surname;
 					}
 					else if (SDL_PointInFRect(&mousePos, &msTopicR)) {
 						msSelectedWidget = MsSelectedWidget::Topic;
@@ -1761,15 +1673,12 @@ int main(int argc, char* argv[])
 			SDL_RenderClear(renderer);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 			SDL_RenderFillRectF(renderer, &msNameR);
-			SDL_RenderFillRectF(renderer, &msSurnameR);
 			SDL_RenderFillRectF(renderer, &msTopicR);
 			SDL_RenderFillRectF(renderer, &msContentR);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
 			msNameText.draw(renderer);
-			msSurnameText.draw(renderer);
 			msTopicText.draw(renderer);
 			drawInBorders(msNameInputText, msNameR, renderer, robotoF);
-			drawInBorders(msSurnameInputText, msSurnameR, renderer, robotoF);
 			drawInBorders(msTopicInputText, msTopicR, renderer, robotoF);
 
 			{
@@ -1836,9 +1745,6 @@ int main(int argc, char* argv[])
 			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
 			if (msSelectedWidget == MsSelectedWidget::Name) {
 				SDL_RenderDrawRectF(renderer, &msNameR);
-			}
-			else if (msSelectedWidget == MsSelectedWidget::Surname) {
-				SDL_RenderDrawRectF(renderer, &msSurnameR);
 			}
 			else if (msSelectedWidget == MsSelectedWidget::Topic) {
 				SDL_RenderDrawRectF(renderer, &msTopicR);
@@ -1943,7 +1849,7 @@ int main(int argc, char* argv[])
 						for (sf::Uint64 i = 0; i < buffer.getSampleCount(); ++i) {
 							samplesStr += std::to_string(buffer.getSamples()[i]) + " ";
 						}
-						p << nameInputText.text << surnameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
+						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						shouldRunRecordingThread = true;
 						});
