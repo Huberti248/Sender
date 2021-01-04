@@ -1232,6 +1232,7 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_KEYDOWN) {
 					keys[event.key.keysym.scancode] = true;
+#ifdef CALL
 					if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 						if (ml.isNameSelected) {
 							if (!ml.nameInputText.text.empty()) {
@@ -1249,6 +1250,7 @@ int main(int argc, char* argv[])
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
 						ml.isNameSelected = !ml.isNameSelected;
 					}
+#endif
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
@@ -1303,6 +1305,7 @@ int main(int argc, char* argv[])
 					if (SDL_PointInFRect(&mousePos, &ml.writeMessageBtnR)) {
 						state = State::MessageSend;
 					}
+#ifdef CALL
 					else if (SDL_PointInFRect(&mousePos, &ml.nameR)) {
 						ml.isNameSelected = true;
 					}
@@ -1333,6 +1336,7 @@ int main(int argc, char* argv[])
 						receiverName = nameInputText.text;
 						receiverSurname = surnameInputText.text;
 					}
+#endif
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
@@ -1384,14 +1388,17 @@ int main(int argc, char* argv[])
 					}
 				}
 				if (event.type == SDL_TEXTINPUT) {
+#ifdef CALL
 					if (ml.isNameSelected) {
 						ml.nameInputText.setText(renderer, robotoF, ml.nameInputText.text + event.text.text, { TEXT_COLOR });
 					}
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
 					}
+#endif
 				}
 			}
+#ifdef CALL
 			if (isCaller) {
 				sf::Packet packet;
 				packet << PacketType::IsCallAccepted << nameInputText.text << surnameInputText.text;
@@ -1412,6 +1419,7 @@ int main(int argc, char* argv[])
 					state = State::Call;
 				}
 			}
+#endif
 			sf::Packet sentPacket;
 			sentPacket << PacketType::ReceiveMessages << nameInputText.text << surnameInputText.text;
 			socket.send(sentPacket);
@@ -1482,6 +1490,7 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
+#ifdef CALL
 			if (ml.callState == CallState::None) {
 				sf::Packet packet;
 				packet
@@ -1502,6 +1511,7 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
+#endif
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 			for (int i = 0; i < ml.messages.size(); ++i) {
@@ -1517,6 +1527,7 @@ int main(int argc, char* argv[])
 				}
 			}
 			SDL_RenderCopyF(renderer, ml.writeMessageT, 0, &ml.writeMessageBtnR);
+#ifdef CALL
 			SDL_RenderCopyF(renderer, ml.callT, 0, &ml.callBtnR);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 			SDL_RenderFillRectF(renderer, &ml.nameR);
@@ -1536,6 +1547,7 @@ int main(int argc, char* argv[])
 				SDL_RenderCopyF(renderer, ml.pickUpT, 0, &ml.pickUpBtnR);
 				ml.callerNameAndSurnameText.draw(renderer);
 			}
+#endif
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageContent) {
@@ -1976,10 +1988,10 @@ int main(int argc, char* argv[])
 							}
 						}
 						shouldRunPlayingThread = true;
-			});
+						});
 					t2.detach();
-		}
-	}
+				}
+			}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -1991,8 +2003,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-}
-			}
+		}
+	}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-		}
+}
