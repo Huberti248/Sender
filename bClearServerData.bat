@@ -1,1 +1,0 @@
-del C:\Users\Hubert\AppData\Roaming\Huberti\Sender\data.xml
