@@ -20,6 +20,7 @@
 #include <SFML/Network.hpp>
 #include <SFML/Audio.hpp>
 //#include <SFML/Graphics.hpp>
+#include <nfd.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -32,6 +33,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <locale>
+#include <codecvt>
 #ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
 #include <jni.h>
@@ -43,6 +46,7 @@ namespace fs = std::filesystem;
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <Shlobj.h>
 #endif
 
 using namespace std::chrono_literals;
@@ -262,7 +266,7 @@ int eventWatch(void* userdata, SDL_Event* event)
 	return 0;
 }
 
-// Get current date/time, format is YYYY-MM-DD.HH:mm:ss
+// Get current date/time, format is YYYY-MM-DD HH:mm:ss
 std::string currentDateTime()
 {
 	time_t     now = std::time(0);
@@ -271,7 +275,7 @@ std::string currentDateTime()
 	tstruct = *std::localtime(&now);
 	// Visit http://en.cppreference.com/w/cpp/chrono/c/strftime
 	// for more information about date/time format
-	std::strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
+	std::strftime(buf, sizeof(buf), "%Y-%m-%d %X", &tstruct);
 
 	return buf;
 }
@@ -358,13 +362,19 @@ enum class State {
 	Call,
 };
 
+struct Attachment {
+	std::string filename;
+	std::string fileContent;
+	Text text;
+};
+
 struct Message {
 	Text topicText;
 	Text senderNameText;
-	Text senderSurnameText;
 	Text dateText;
 	Text contentText;
 	SDL_FRect r{};
+	std::vector<Attachment> attachments;
 };
 
 float getValueFromValueAndPercent(float value, float percent)
@@ -396,8 +406,23 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
+std::string readWholeFile(std::string path)
+{
+	std::stringstream ss;
+	std::ifstream ifs(path);
+	ss << ifs.rdbuf();
+	return ss.str();
+}
+
+void writeWholeFile(std::string path, std::string fileContent)
+{
+	std::stringstream ss(fileContent);
+	std::ofstream ofs(path);
+	ofs << fileContent << std::endl;
+}
+
 void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
-	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font)
+	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
 	sf::Packet packet;
 	packet
@@ -406,11 +431,17 @@ void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInpu
 		<< msTopicInputText.text
 		<< msContentInputText.text
 		<< nameInputText.text;
+	for (int i = 0; i < attachments.size(); ++i) {
+		packet
+			<< attachments[i].filename
+			<< attachments[i].fileContent;
+	}
 	socket.send(packet); // TODO: Do something on fail + put it on separate thread?
 	msNameInputText.setText(renderer, font, "");
 	msTopicInputText.setText(renderer, font, "");
 	msContentInputText.setText(renderer, font, "");
 	msSelectedWidget = MsSelectedWidget::Name;
+	attachments.clear();
 }
 
 enum class Scroll {
@@ -427,55 +458,6 @@ struct Client {
 		socket = std::make_shared<sf::TcpSocket>();
 	}
 };
-
-pugi::xml_document loadDataDoc()
-{
-	pugi::xml_document srcDoc;
-	srcDoc.load_file((prefPath + "data.xml").c_str());
-	auto currMessageNodes = srcDoc.child("root").children("message");
-	auto currCallNodes = srcDoc.child("root").children("call");
-	pugi::xml_document dstDoc;
-	pugi::xml_node rootNode = dstDoc.append_child("root");
-	for (pugi::xml_node& currMessageNode : currMessageNodes) {
-		pugi::xml_node messageNode = rootNode.append_child("message");
-		messageNode.append_child("receiverName").append_child(pugi::node_pcdata).set_value(currMessageNode.child("receiverName").text().as_string());
-		messageNode.append_child("receiverSurname").append_child(pugi::node_pcdata).set_value(currMessageNode.child("receiverSurname").text().as_string());
-		messageNode.append_child("topic").append_child(pugi::node_pcdata).set_value(currMessageNode.child("topic").text().as_string());
-		messageNode.append_child("content").append_child(pugi::node_pcdata).set_value(currMessageNode.child("content").text().as_string());
-		messageNode.append_child("senderName").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderName").text().as_string());
-		messageNode.append_child("senderSurname").append_child(pugi::node_pcdata).set_value(currMessageNode.child("senderSurname").text().as_string());
-	}
-
-	for (pugi::xml_node& currCallNode : currCallNodes) {
-		pugi::xml_node callNode = rootNode.append_child("call");
-		callNode.append_child("callerName").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerName").text().as_string());
-		callNode.append_child("callerSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("callerSurname").text().as_string());
-		callNode.append_child("receiverName").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverName").text().as_string());
-		callNode.append_child("receiverSurname").append_child(pugi::node_pcdata).set_value(currCallNode.child("receiverSurname").text().as_string());
-		callNode.append_child("status").append_child(pugi::node_pcdata).set_value(currCallNode.child("status").text().as_string());
-
-		auto currCallerAudioNodes = currCallNode.children("callerAudio");
-		for (pugi::xml_node& currCallerAudioNode : currCallerAudioNodes) {
-			pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
-			callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("id").text().as_string());
-			callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("sampleRate").text().as_string());
-			callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("channelCount").text().as_string());
-			callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("sampleCount").text().as_string());
-			callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(currCallerAudioNode.child("samples").text().as_string());
-		}
-
-		auto currReceiverAudioNodes = currCallNode.children("receiverAudio");
-		for (pugi::xml_node& currReceiverAudioNode : currReceiverAudioNodes) {
-			pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
-			receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("id").text().as_string());
-			receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("sampleRate").text().as_string());
-			receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("channelCount").text().as_string());
-			receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("sampleCount").text().as_string());
-			receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(currReceiverAudioNode.child("samples").text().as_string());
-		}
-	}
-	return dstDoc;
-}
 
 std::vector<pugi::xml_node> pugiXmlObjectRangeToStdVector(pugi::xml_object_range<pugi::xml_named_node_iterator> xmlObjectRange)
 {
@@ -523,72 +505,90 @@ void runServer()
 								std::string msTopicInputText;
 								std::string msContentInputText;
 								std::string nameInputText;
-								std::string surnameInputText;
-								packet >> msNameInputText >> msTopicInputText >> msContentInputText >> nameInputText >> surnameInputText;
-								pugi::xml_document doc = loadDataDoc();
+								packet >> msNameInputText >> msTopicInputText >> msContentInputText >> nameInputText;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								pugi::xml_node messageNode = rootNode.append_child("message");
 								pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
-								pugi::xml_node receiverSurnameNode = messageNode.append_child("receiverSurname");
 								pugi::xml_node topicNode = messageNode.append_child("topic");
 								pugi::xml_node contentNode = messageNode.append_child("content");
 								pugi::xml_node senderNameNode = messageNode.append_child("senderName");
-								pugi::xml_node senderSurnameNode = messageNode.append_child("senderSurname");
+								pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
 								receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
 								topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
 								contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
 								senderNameNode.append_child(pugi::node_pcdata).set_value(nameInputText.c_str());
-								senderSurnameNode.append_child(pugi::node_pcdata).set_value(surnameInputText.c_str());
+								dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
+								pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
+								{
+									std::string filename, fileContent;
+									while (packet >> filename >> fileContent) {
+										pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
+										attachmentNode.append_child("filename").append_child(pugi::node_pcdata).set_value(filename.c_str());
+										attachmentNode.append_child("fileContent").append_child(pugi::node_pcdata).set_value(fileContent.c_str());
+									}
+								}
 								doc.save_file((prefPath + "data.xml").c_str());
 							}
 							else if (packetType == PacketType::ReceiveMessages) {
-								std::string name, surname;
-								packet >> name >> surname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string name;
+								packet >> name;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								auto messageNodes = doc.child("root").children("message");
 								sf::Packet answerPacket;
-								for (pugi::xml_node messageNode : messageNodes) {
-									if (messageNode.child("receiverName").text().as_string() == name && messageNode.child("receiverSurname").text().as_string() == surname) {
+								for (pugi::xml_node& messageNode : messageNodes) {
+									if (messageNode.child("receiverName").text().as_string() == name) {
 										answerPacket
 											<< messageNode.child("topic").text().as_string()
 											<< messageNode.child("senderName").text().as_string()
-											<< messageNode.child("senderSurname").text().as_string()
-											<< messageNode.child("date").text().as_string()
-											<< messageNode.child("content").text().as_string();
+											<< messageNode.child("content").text().as_string()
+											<< messageNode.child("dateTime").text().as_string();
+										auto attachmentNodes = messageNode.child("attachments").children("attachment");
+										int attachmentNodesCount = 0;
+										{
+											for (pugi::xml_node& attachmentNode : attachmentNodes) {
+												++attachmentNodesCount;
+											}
+										}
+										answerPacket << attachmentNodesCount;
+										for (pugi::xml_node& attachmentNode : attachmentNodes) {
+											answerPacket
+												<< attachmentNode.child("filename").text().as_string()
+												<< attachmentNode.child("fileContent").text().as_string();
+										}
 									}
 								}
 								clients[i].socket->send(answerPacket);
 							}
 							else if (packetType == PacketType::MakeCall) {
-								std::string callerName, callerSurname, receiverName, receiverSurname;
-								packet >> callerName >> callerSurname >> receiverName >> receiverSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName, receiverName;
+								packet >> callerName >> receiverName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								pugi::xml_node callNode = rootNode.append_child("call");
 								pugi::xml_node callerNameNode = callNode.append_child("callerName");
-								pugi::xml_node callerSurnameNode = callNode.append_child("callerSurname");
 								pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
-								pugi::xml_node receiverSurnameNode = callNode.append_child("receiverSurname");
 								pugi::xml_node statusNode = callNode.append_child("status");
 								callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
-								callerSurnameNode.append_child(pugi::node_pcdata).set_value(callerSurname.c_str());
 								receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
-								receiverSurnameNode.append_child(pugi::node_pcdata).set_value(receiverSurname.c_str());
 								statusNode.append_child(pugi::node_pcdata).set_value("pending");
 								doc.save_file((prefPath + "data.xml").c_str());
 							}
 							else if (packetType == PacketType::CheckCalls) {
-								std::string receiverName, receiverSurname;
-								packet >> receiverName >> receiverSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string receiverName;
+								packet >> receiverName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								bool found = false;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (receiverName == callNode.child("receiverName").text().as_string() &&
-										receiverSurname == callNode.child("receiverSurname").text().as_string()) {
-										answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string() << callNode.child("callerSurname").text().as_string();
+									if (receiverName == callNode.child("receiverName").text().as_string()) {
+										answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string();
 										found = true;
 										break;
 									}
@@ -599,14 +599,14 @@ void runServer()
 								clients[i].socket->send(answerPacket);
 							}
 							else if (packetType == PacketType::AcceptCall) {
-								std::string receiverName, receiverSurname;
-								packet >> receiverName >> receiverSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string receiverName;
+								packet >> receiverName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName &&
-										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+									if (callNode.child("receiverName").text().as_string() == receiverName) {
 										callNode.remove_child("status");
 										pugi::xml_node statusNode = callNode.append_child("status");
 										statusNode.append_child(pugi::node_pcdata).set_value("accepted");
@@ -616,20 +616,20 @@ void runServer()
 								doc.save_file((prefPath + "data.xml").c_str());
 							}
 							else if (packetType == PacketType::IsCallAccepted) {
-								std::string callerName, callerSurname;
-								packet >> callerName >> callerSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName;
+								packet >> callerName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								bool found = false;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName &&
-										callNode.child("callerSurname").text().as_string() == callerSurname) {
+									if (callNode.child("callerName").text().as_string() == callerName) {
 										found = true;
 										std::string status = callNode.child("status").text().as_string();
 										if (status == "accepted") {
-											answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string() << callNode.child("receiverSurname").text().as_string();
+											answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string();
 										}
 										else {
 											answerPacket << PacketType::CallIsNotAccepted;
@@ -643,16 +643,16 @@ void runServer()
 								clients[i].socket->send(answerPacket);
 							}
 							else if (packetType == PacketType::SendCallerAudioData) {
-								std::string callerName, callerSurname;
-								packet >> callerName >> callerSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName;
+								packet >> callerName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								// TODO: Handle situations where there are more than one call to the same person and things like that (remember to do the same in below if statements)
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName &&
-										callNode.child("callerSurname").text().as_string() == callerSurname) {
+									if (callNode.child("callerName").text().as_string() == callerName) {
 										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
 										int lastCallerAudioNodeId = 0;
 										auto callerAudioNodes = callNode.children("callerAudio");
@@ -684,15 +684,15 @@ void runServer()
 								}
 							}
 							else if (packetType == PacketType::SendReceiverAudioData) {
-								std::string receiverName, receiverSurname;
-								packet >> receiverName >> receiverSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string receiverName;
+								packet >> receiverName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName &&
-										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+									if (callNode.child("receiverName").text().as_string() == receiverName) {
 										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
 										int lastReceiverAudioNodeId = 0;
 										auto callerAudioNodes = callNode.children("receiverAudio");
@@ -723,17 +723,17 @@ void runServer()
 								}
 							}
 							else if (packetType == PacketType::GetCallerAudioData) {
-								std::string callerName, callerSurname;
-								packet >> callerName >> callerSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName;
+								packet >> callerName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								// TODO: Is it possible that second user won't support channelCount? If yes what to do about it?
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								bool found = false;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName &&
-										callNode.child("callerSurname").text().as_string() == callerSurname) {
+									if (callNode.child("callerName").text().as_string() == callerName) {
 										std::vector<pugi::xml_node> callerAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("callerAudio"));
 										if (!callerAudioNodes.empty()) {
 											found = true;
@@ -764,16 +764,16 @@ void runServer()
 								}
 							}
 							else if (packetType == PacketType::GetReceiverAudioData) {
-								std::string receiverName, receiverSurname;
-								packet >> receiverName >> receiverSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string receiverName;
+								packet >> receiverName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								sf::Packet answerPacket;
 								bool found = false;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName &&
-										callNode.child("receiverSurname").text().as_string() == receiverSurname) {
+									if (callNode.child("receiverName").text().as_string() == receiverName) {
 										std::vector<pugi::xml_node> receiverAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("receiverAudio"));
 										if (!receiverAudioNodes.empty()) {
 											found = true;
@@ -804,14 +804,14 @@ void runServer()
 								}
 							}
 							else if (packetType == PacketType::DisconnectCall) {
-								std::string callerName, callerSurname;
-								packet >> callerName >> callerSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName;
+								packet >> callerName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName &&
-										callNode.child("callerSurname").text().as_string() == callerSurname) {
+									if (callNode.child("callerName").text().as_string() == callerName) {
 										rootNode.remove_child(callNode);
 										break;
 									}
@@ -820,15 +820,15 @@ void runServer()
 							}
 							else if (packetType == PacketType::DoesCallExits) {
 								sf::Packet answerPacket;
-								std::string callerName, callerSurname;
-								packet >> callerName >> callerSurname;
-								pugi::xml_document doc = loadDataDoc();
+								std::string callerName;
+								packet >> callerName;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
 								auto callNodes = rootNode.children("call");
 								bool found = false;
 								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName &&
-										callNode.child("callerSurname").text().as_string() == callerSurname) {
+									if (callNode.child("callerName").text().as_string() == callerName) {
 										found = true;
 										break;
 									}
@@ -920,7 +920,7 @@ int main(int argc, char* argv[])
 	nameText.dstR.w = 60;
 	nameText.dstR.h = 20;
 	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
-	nameText.dstR.y = nameR.y- nameText.dstR.h;
+	nameText.dstR.y = nameR.y - nameText.dstR.h;
 	Text nameInputText;
 	nameInputText.setText(renderer, robotoF, "");
 	nameInputText.dstR = nameR;
@@ -965,8 +965,8 @@ int main(int argc, char* argv[])
 	ml.callerNameText.dstR.h = 20;
 	ml.callerNameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
 	ml.callerNameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameText.dstR.h / 2;
-	std::string callerName, callerSurname;
-	std::string receiverName, receiverSurname;
+	std::string callerName;
+	std::string receiverName;
 #endif
 #if 1 // NOTE: MessageContent
 	SDL_Texture* closeT = IMG_LoadTexture(renderer, "res/close.png");
@@ -984,7 +984,7 @@ int main(int argc, char* argv[])
 	topicText.wMultiplier = 0.3;
 	SDL_FRect contentR;
 	contentR.w = windowWidth;
-	contentR.h = windowHeight - closeBtnR.h;
+	contentR.h = windowHeight - closeBtnR.h - 260;
 	contentR.x = 0;
 	contentR.y = closeBtnR.y + closeBtnR.h;
 	SDL_FRect scrollR;
@@ -1000,6 +1000,18 @@ int main(int argc, char* argv[])
 	scrollBtnR.y = scrollR.y;
 	Scroll scroll = Scroll::None;
 	std::vector<Text> texts;
+	Text attachmentsText;
+	attachmentsText.setText(renderer, robotoF, u8"Załączniki", { 255,255,255 });
+	attachmentsText.dstR.w = 70;
+	attachmentsText.dstR.h = 20;
+	attachmentsText.dstR.x = windowWidth / 2 - attachmentsText.dstR.w / 2;
+	attachmentsText.dstR.y = contentR.y + contentR.h;
+	attachmentsText.autoAdjustW = true;
+	SDL_FRect attachmentR;
+	attachmentR.x = 0;
+	attachmentR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+	attachmentR.w = windowWidth;
+	attachmentR.h = windowHeight - attachmentR.y;
 #endif
 #if 1 // NOTE: MessageSend
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
@@ -1008,6 +1020,12 @@ int main(int argc, char* argv[])
 	msSendBtnR.h = 64;
 	msSendBtnR.x = 0;
 	msSendBtnR.y = windowHeight - msSendBtnR.h;
+	SDL_Texture* addAttachmentT = IMG_LoadTexture(renderer, "res/addAttachment.png");
+	SDL_FRect msAddAttachmentBtnR;
+	msAddAttachmentBtnR.w = 256;
+	msAddAttachmentBtnR.h = 64;
+	msAddAttachmentBtnR.x = msSendBtnR.x + msSendBtnR.w + 3;
+	msAddAttachmentBtnR.y = msSendBtnR.y;
 	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
 	SDL_FRect msNameR;
 	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
@@ -1046,11 +1064,17 @@ int main(int argc, char* argv[])
 	msTopicInputText.dstR.y = msTopicR.y + msTopicR.h / 2 - msTopicInputText.dstR.h / 2;
 	msTopicInputText.autoAdjustW = true;
 	msTopicInputText.wMultiplier = 0.3;
+	Text msContentText;
+	msContentText.setText(renderer, robotoF, u8"Treść", { TEXT_COLOR });
+	msContentText.dstR.w = 60;
+	msContentText.dstR.h = 20;
+	msContentText.dstR.x = windowWidth / 2 - msContentText.dstR.w / 2;
+	msContentText.dstR.y = closeBtnR.y + closeBtnR.h;
 	SDL_FRect msContentR;
 	msContentR.w = windowWidth;
-	msContentR.h = windowHeight - closeBtnR.h - msSendBtnR.h;
+	msContentR.h = windowHeight - closeBtnR.h - msSendBtnR.h - 260;
 	msContentR.x = 0;
-	msContentR.y = closeBtnR.y + closeBtnR.h;
+	msContentR.y = msContentText.dstR.y + msContentText.dstR.h;
 	Text msContentInputText;
 	msContentInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
 	msContentInputText.dstR = closeBtnR;
@@ -1060,6 +1084,19 @@ int main(int argc, char* argv[])
 	msContentInputText.autoAdjustW = true;
 	msContentInputText.wMultiplier = 0.3;
 	bool textInputEventInMsContentInputText = false;
+	Text msAttachmentsText;
+	msAttachmentsText.setText(renderer, robotoF, u8"Załączniki", { TEXT_COLOR });
+	msAttachmentsText.dstR.w = 70;
+	msAttachmentsText.dstR.h = 20;
+	msAttachmentsText.dstR.x = windowWidth / 2 - msAttachmentsText.dstR.w / 2;
+	msAttachmentsText.dstR.y = msContentR.y + msContentR.h;
+	msAttachmentsText.autoAdjustW = true;
+	std::vector<Attachment> msAttachments;
+	SDL_FRect msAttachmentR;
+	msAttachmentR.x = 0;
+	msAttachmentR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
+	msAttachmentR.w = windowWidth;
+	msAttachmentR.h = msSendBtnR.y - msAttachmentR.y;
 #endif
 #if 1 // NOTE: Call
 	bool isDisconnectedLocally = false;
@@ -1290,7 +1327,6 @@ int main(int argc, char* argv[])
 									message.r.y += windowHeight;
 									message.topicText.dstR.y += windowHeight;
 									message.senderNameText.dstR.y += windowHeight;
-									message.senderSurnameText.dstR.y += windowHeight;
 									message.dateText.dstR.y += windowHeight;
 								}
 							}
@@ -1308,7 +1344,6 @@ int main(int argc, char* argv[])
 									message.r.y -= windowHeight;
 									message.topicText.dstR.y -= windowHeight;
 									message.senderNameText.dstR.y -= windowHeight;
-									message.senderSurnameText.dstR.y -= windowHeight;
 									message.dateText.dstR.y -= windowHeight;
 								}
 							}
@@ -1358,12 +1393,32 @@ int main(int argc, char* argv[])
 			{
 				int i = 0;
 				while (
-					receivedPacket >> newMessages.back().topicText.text
+					receivedPacket
+					>> newMessages.back().topicText.text
 					>> newMessages.back().senderNameText.text
-					>> newMessages.back().senderSurnameText.text
-					>> newMessages.back().dateText.text
 					>> newMessages.back().contentText.text
+					>> newMessages.back().dateText.text
 					) {
+					int attachmentNodesCount = 0;
+					receivedPacket >> attachmentNodesCount;
+					for (int i = 0; i < attachmentNodesCount; ++i) {
+						newMessages.back().attachments.push_back(Attachment());
+						receivedPacket
+							>> newMessages.back().attachments.back().filename
+							>> newMessages.back().attachments.back().fileContent;
+						newMessages.back().attachments.back().text.autoAdjustW = true;
+						newMessages.back().attachments.back().text.wMultiplier = 0.2;
+						newMessages.back().attachments.back().text.setText(renderer, robotoF, newMessages.back().attachments.back().filename, { 255,255,255 });
+						newMessages.back().attachments.back().text.dstR.h = 20;
+						newMessages.back().attachments.back().text.dstR.x = 0;
+						if (newMessages.back().attachments.size() == 1) {
+							newMessages.back().attachments.back().text.dstR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
+						}
+						else {
+							newMessages.back().attachments.back().text.dstR.y = newMessages.back().attachments[newMessages.back().attachments.size() - 2].text.dstR.y + newMessages.back().attachments[newMessages.back().attachments.size() - 2].text.dstR.h;
+						}
+					}
+
 					newMessages.back().r.w = windowWidth;
 					newMessages.back().r.h = 20;
 					newMessages.back().r.x = 0;
@@ -1380,17 +1435,11 @@ int main(int argc, char* argv[])
 					newMessages.back().dateText.dstR.w *= 0.3;
 					newMessages.back().dateText.dstR.x = windowWidth - newMessages.back().dateText.dstR.w - 3;
 
-					newMessages.back().senderSurnameText.dstR = newMessages.back().r;
-					newMessages.back().senderSurnameText.autoAdjustW = true;
-					newMessages.back().senderSurnameText.setText(renderer, robotoF, newMessages.back().senderSurnameText.text);
-					newMessages.back().senderSurnameText.dstR.w *= 0.3;
-					newMessages.back().senderSurnameText.dstR.x = newMessages.back().dateText.dstR.x - newMessages.back().senderSurnameText.dstR.w - 10;
-
 					newMessages.back().senderNameText.dstR = newMessages.back().r;
 					newMessages.back().senderNameText.autoAdjustW = true;
 					newMessages.back().senderNameText.setText(renderer, robotoF, newMessages.back().senderNameText.text);
 					newMessages.back().senderNameText.dstR.w *= 0.3;
-					newMessages.back().senderNameText.dstR.x = newMessages.back().senderSurnameText.dstR.x - newMessages.back().senderNameText.dstR.w - 10;
+					newMessages.back().senderNameText.dstR.x = newMessages.back().dateText.dstR.x - newMessages.back().senderNameText.dstR.w - 10;
 
 					newMessages.back().contentText.dstR = newMessages.back().topicText.dstR;
 					newMessages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
@@ -1410,7 +1459,6 @@ int main(int argc, char* argv[])
 				for (int i = 0; i < ml.messages.size(); ++i) {
 					if (ml.messages[i].topicText.text != newMessages[i].topicText.text ||
 						ml.messages[i].senderNameText.text != newMessages[i].senderNameText.text ||
-						ml.messages[i].senderSurnameText.text != newMessages[i].senderSurnameText.text ||
 						ml.messages[i].dateText.text != newMessages[i].dateText.text ||
 						ml.messages[i].contentText.text != newMessages[i].contentText.text) {
 						ml.messages = newMessages;
@@ -1450,7 +1498,6 @@ int main(int argc, char* argv[])
 					SDL_RenderDrawRectF(renderer, &ml.messages[i].r);
 					ml.messages[i].topicText.draw(renderer);
 					ml.messages[i].senderNameText.draw(renderer);
-					ml.messages[i].senderSurnameText.draw(renderer);
 					ml.messages[i].dateText.draw(renderer);
 				}
 			}
@@ -1498,6 +1545,26 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
 						state = State::MessageList;
+					}
+					for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+						if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR)) {
+							// TODO: Don't allow to overwrite existing files
+							std::wstring path;
+							{
+								wchar_t* p = 0;
+								SHGetKnownFolderPath(FOLDERID_Downloads, 0, 0, &p);
+								std::wstringstream ss;
+								ss << p;
+								path = ss.str();
+								CoTaskMemFree(static_cast<void*>(p));
+							}
+							{
+								std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+								std::ofstream ofs(path + L"\\" + converter.from_bytes(ml.messages[messageIndexToShow].attachments[i].filename));
+								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent << std::endl;
+							}
+							ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
+						}
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1567,6 +1634,10 @@ int main(int argc, char* argv[])
 					SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
 					SDL_RenderFillRectF(renderer, &scrollBtnR);
 				}
+			}
+			attachmentsText.draw(renderer);
+			for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+				ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
 			}
 			SDL_RenderPresent(renderer);
 		}
@@ -1643,9 +1714,35 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
 						state = State::MessageList;
+						msAttachments.clear();
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						sendMessage(socket, msNameInputText, msTopicInputText, msContentInputText, nameInputText, msSelectedWidget, renderer, robotoF);
+						sendMessage(socket, msNameInputText, msTopicInputText, msContentInputText, nameInputText, msSelectedWidget, renderer, robotoF, msAttachments);
+					}
+					if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
+						nfdpathset_t outPaths;
+						nfdresult_t result = NFD_OpenDialogMultiple(0, 0, &outPaths);
+						if (result == NFD_OKAY) {
+							for (int i = 0; i < NFD_PathSet_GetCount(&outPaths); ++i) {
+								// TODO: Is it going to handle path from some exotic languages correctly??? - it requires u8 for Polish, what about others???
+								msAttachments.push_back(Attachment());
+								std::string path = NFD_PathSet_GetPath(&outPaths, i);
+								msAttachments.back().fileContent = readWholeFile(path);
+								msAttachments.back().filename = fs::path(path).filename().string();
+								msAttachments.back().text.autoAdjustW = true;
+								msAttachments.back().text.wMultiplier = 0.2;
+								msAttachments.back().text.setText(renderer, robotoF, msAttachments.back().filename, { TEXT_COLOR });
+								msAttachments.back().text.dstR.h = 20;
+								msAttachments.back().text.dstR.x = 0;
+								if (msAttachments.size() == 1) {
+									msAttachments.back().text.dstR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
+								}
+								else {
+									msAttachments.back().text.dstR.y = msAttachments[msAttachments.size() - 2].text.dstR.y + msAttachments[msAttachments.size() - 2].text.dstR.h;
+								}
+							}
+							NFD_PathSet_Free(&outPaths);
+						}
 					}
 					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
 						msSelectedWidget = MsSelectedWidget::Name;
@@ -1668,6 +1765,36 @@ int main(int argc, char* argv[])
 					realMousePos.x = event.motion.x;
 					realMousePos.y = event.motion.y;
 				}
+				if (event.type == SDL_MOUSEWHEEL) {
+					if (event.wheel.y > 0) // scroll up
+					{
+						if (!msAttachments.empty()) {
+							float minY = msAttachments.front().text.dstR.y;
+							for (int i = 1; i < msAttachments.size(); ++i) {
+								minY = std::min(minY, msAttachments[i].text.dstR.y);
+							}
+							if (minY < msAttachmentR.y) {
+								for (Attachment& attachment : msAttachments) {
+									attachment.text.dstR.y += attachment.text.dstR.h;
+								}
+							}
+						}
+					}
+					else if (event.wheel.y < 0) // scroll down
+					{
+						if (!msAttachments.empty()) {
+							float maxY = msAttachments.front().text.dstR.y;
+							for (int i = 1; i < msAttachments.size(); ++i) {
+								maxY = std::max(maxY, msAttachments[i].text.dstR.y);
+							}
+							if (maxY >= msAttachmentR.y + msAttachmentR.h) {
+								for (Attachment& attachment : msAttachments) {
+									attachment.text.dstR.y -= attachment.text.dstR.h;
+								}
+							}
+						}
+					}
+				}
 			}
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
 			SDL_RenderClear(renderer);
@@ -1678,6 +1805,7 @@ int main(int argc, char* argv[])
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
 			msNameText.draw(renderer);
 			msTopicText.draw(renderer);
+			msContentText.draw(renderer);
 			drawInBorders(msNameInputText, msNameR, renderer, robotoF);
 			drawInBorders(msTopicInputText, msTopicR, renderer, robotoF);
 
@@ -1753,6 +1881,14 @@ int main(int argc, char* argv[])
 				SDL_RenderDrawRectF(renderer, &msContentR);
 			}
 			SDL_RenderCopyF(renderer, sendT, 0, &msSendBtnR);
+			SDL_RenderCopyF(renderer, addAttachmentT, 0, &msAddAttachmentBtnR);
+			msAttachmentsText.draw(renderer);
+			for (int i = 0; i < msAttachments.size(); ++i) {
+				if (msAttachments[i].text.dstR.y + msAttachments[i].text.dstR.h <= msAttachmentR.y + msAttachmentR.h &&
+					msAttachments[i].text.dstR.y >= msAttachmentR.y) {
+					msAttachments[i].text.draw(renderer);
+				}
+			}
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::Call) {
@@ -1792,7 +1928,7 @@ int main(int argc, char* argv[])
 			socketReceiveMutex.lock();
 			{
 				sf::Packet p;
-				p << PacketType::DoesCallExits << callerName << callerSurname;
+				p << PacketType::DoesCallExits << callerName;
 				socket.send(p); // TODO: Do something on fail + put it on separate thread?
 			}
 			{
@@ -1816,7 +1952,7 @@ int main(int argc, char* argv[])
 #endif
 				if (isDisconnectedLocally) {
 					sf::Packet p;
-					p << PacketType::DisconnectCall << callerName << callerSurname;
+					p << PacketType::DisconnectCall << callerName;
 					socket.send(p); // TODO: Do something on fail + put it on separate thread?
 				}
 				state = State::MessageList;
@@ -1854,7 +1990,7 @@ int main(int argc, char* argv[])
 						shouldRunRecordingThread = true;
 						});
 					t1.detach();
-				}
+					}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {
@@ -1862,10 +1998,10 @@ int main(int argc, char* argv[])
 						{
 							sf::Packet p;
 							if (isCaller) {
-								p << PacketType::GetReceiverAudioData << receiverName << receiverSurname;
+								p << PacketType::GetReceiverAudioData << receiverName;
 							}
 							else {
-								p << PacketType::GetCallerAudioData << callerName << callerSurname;
+								p << PacketType::GetCallerAudioData << callerName;
 							}
 							socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						}
@@ -1897,7 +2033,7 @@ int main(int argc, char* argv[])
 						});
 					t2.detach();
 				}
-			}
+				}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -1909,8 +2045,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
+			}
 		}
-	}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-}
+	}
