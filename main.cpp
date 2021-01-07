@@ -1,4 +1,9 @@
-﻿#include <iostream>
+﻿/*
+TODO:
+- Think what might happen if I'm reading/writing in binary mode files and sending them via at least 3 machines (user,server,user and user might login on a different PC and server db might be moved as well)
+- Make download all button bigger in message content + rename it on the picture from "pobierz" to "pobierz wszystkie"
+*/
+#include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -35,6 +40,8 @@
 #include <mutex>
 #include <locale>
 #include <codecvt>
+#include <sys/types.h>
+#include <sys/stat.h>
 #ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
 #include <jni.h>
@@ -363,7 +370,7 @@ enum class State {
 };
 
 struct Attachment {
-	std::string filename;
+	std::string path;
 	std::string fileContent;
 	Text text;
 };
@@ -406,19 +413,12 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
-std::string readWholeFile(std::string path)
+std::string readWholeFileInBinary(std::string path)
 {
 	std::stringstream ss;
-	std::ifstream ifs(path);
+	std::ifstream ifs(path, std::ifstream::in | std::ifstream::binary);
 	ss << ifs.rdbuf();
 	return ss.str();
-}
-
-void writeWholeFile(std::string path, std::string fileContent)
-{
-	std::stringstream ss(fileContent);
-	std::ofstream ofs(path);
-	ofs << fileContent << std::endl;
 }
 
 void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
@@ -433,7 +433,7 @@ void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInpu
 		<< nameInputText.text;
 	for (int i = 0; i < attachments.size(); ++i) {
 		packet
-			<< attachments[i].filename
+			<< attachments[i].path
 			<< attachments[i].fileContent;
 	}
 	socket.send(packet); // TODO: Do something on fail + put it on separate thread?
@@ -470,6 +470,28 @@ std::vector<pugi::xml_node> pugiXmlObjectRangeToStdVector(pugi::xml_object_range
 	return vec;
 }
 
+std::string deleteFirstColon(std::string path)
+{
+	std::size_t index = path.find(":");
+	if (index == std::string::npos) {
+		return path;
+	}
+	else {
+		return path.erase(index, 1);
+	}
+}
+
+std::string deleteFilename(std::string path)
+{
+	std::size_t index = path.find_last_of("\\");
+	if (index != std::string::npos) {
+		return path.erase(index);
+	}
+	else {
+		return "";
+	}
+}
+
 void runServer()
 {
 	sf::TcpListener listener;
@@ -492,6 +514,12 @@ void runServer()
 			else {
 				for (int i = 0; i < clients.size(); ++i) {
 					if (selector.isReady(*(clients[i].socket))) {
+						if (!fs::exists(prefPath + "data.xml")) // NOTE: If the data.xml doesn't exist, create one
+						{
+							pugi::xml_document doc;
+							pugi::xml_node rootNode = doc.append_child("root");
+							doc.save_file((prefPath + "data.xml").c_str());
+						}
 						sf::Packet packet;
 						if (clients[i].socket->receive(packet) == sf::Socket::Done) {
 							PacketType packetType;
@@ -509,12 +537,27 @@ void runServer()
 								pugi::xml_document doc;
 								doc.load_file((prefPath + "data.xml").c_str());
 								pugi::xml_node rootNode = doc.child("root");
+								int maxId = 0;
+#if 1 // NOTE: Find max id
+								{
+									auto messageNodes = rootNode.children("message");
+									for (auto messageNode : messageNodes) {
+										int id = messageNode.child("id").text().as_int();
+										if (id > maxId) {
+											maxId = id;
+										}
+									}
+								}
+#endif
 								pugi::xml_node messageNode = rootNode.append_child("message");
+								pugi::xml_node idNode = messageNode.append_child("id");
 								pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
 								pugi::xml_node topicNode = messageNode.append_child("topic");
 								pugi::xml_node contentNode = messageNode.append_child("content");
 								pugi::xml_node senderNameNode = messageNode.append_child("senderName");
 								pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
+
+								idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
 								receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
 								topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
 								contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
@@ -522,11 +565,23 @@ void runServer()
 								dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
 								pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
 								{
-									std::string filename, fileContent;
-									while (packet >> filename >> fileContent) {
+									std::string path, fileContent;
+									while (packet >> path >> fileContent) {
+										std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
+										std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
+										if (!fs::exists(storePathWithoutFilename)) {
+											fs::create_directories(storePathWithoutFilename);
+										}
+										std::string oldStorePathWithFilename = storePathWithFilename;
+										for (int i = 0; fs::exists(storePathWithFilename); ++i) {
+											storePathWithFilename = oldStorePathWithFilename;
+											storePathWithFilename += std::to_string(i);
+										}
+										std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+										ofs << fileContent;
 										pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
-										attachmentNode.append_child("filename").append_child(pugi::node_pcdata).set_value(filename.c_str());
-										attachmentNode.append_child("fileContent").append_child(pugi::node_pcdata).set_value(fileContent.c_str());
+										attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
+										attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
 									}
 								}
 								doc.save_file((prefPath + "data.xml").c_str());
@@ -555,8 +610,8 @@ void runServer()
 										answerPacket << attachmentNodesCount;
 										for (pugi::xml_node& attachmentNode : attachmentNodes) {
 											answerPacket
-												<< attachmentNode.child("filename").text().as_string()
-												<< attachmentNode.child("fileContent").text().as_string();
+												<< attachmentNode.child("userPath").text().as_string()
+												<< readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string());
 										}
 									}
 								}
@@ -1012,6 +1067,12 @@ int main(int argc, char* argv[])
 	attachmentR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
 	attachmentR.w = windowWidth;
 	attachmentR.h = windowHeight - attachmentR.y;
+	SDL_Texture* downloadT = IMG_LoadTexture(renderer, "res/download.png");
+	SDL_FRect downloadBtnR;
+	downloadBtnR.w = 64;
+	downloadBtnR.h = 20;
+	downloadBtnR.x = 0;
+	downloadBtnR.y = attachmentsText.dstR.y;
 #endif
 #if 1 // NOTE: MessageSend
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
@@ -1219,7 +1280,7 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
-				}
+						}
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
 					for (int i = 0; i < ml.messages.size(); ++i) {
@@ -1305,7 +1366,7 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
-				}
+					}
 				if (event.type == SDL_MOUSEMOTION) {
 					float scaleX, scaleY;
 					SDL_RenderGetScale(renderer, &scaleX, &scaleY);
@@ -1404,15 +1465,15 @@ int main(int argc, char* argv[])
 					for (int i = 0; i < attachmentNodesCount; ++i) {
 						newMessages.back().attachments.push_back(Attachment());
 						receivedPacket
-							>> newMessages.back().attachments.back().filename
+							>> newMessages.back().attachments.back().path
 							>> newMessages.back().attachments.back().fileContent;
 						newMessages.back().attachments.back().text.autoAdjustW = true;
 						newMessages.back().attachments.back().text.wMultiplier = 0.2;
-						newMessages.back().attachments.back().text.setText(renderer, robotoF, newMessages.back().attachments.back().filename, { 255,255,255 });
+						newMessages.back().attachments.back().text.setText(renderer, robotoF, fs::path(newMessages.back().attachments.back().path).filename().string(), { 255,255,255 });
 						newMessages.back().attachments.back().text.dstR.h = 20;
 						newMessages.back().attachments.back().text.dstR.x = 0;
 						if (newMessages.back().attachments.size() == 1) {
-							newMessages.back().attachments.back().text.dstR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
+							newMessages.back().attachments.back().text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
 						}
 						else {
 							newMessages.back().attachments.back().text.dstR.y = newMessages.back().attachments[newMessages.back().attachments.size() - 2].text.dstR.y + newMessages.back().attachments[newMessages.back().attachments.size() - 2].text.dstR.h;
@@ -1560,11 +1621,33 @@ int main(int argc, char* argv[])
 							}
 							{
 								std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-								std::ofstream ofs(path + L"\\" + converter.from_bytes(ml.messages[messageIndexToShow].attachments[i].filename));
-								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent << std::endl;
+								// TODO: Are there any possible errors because of the fact that this file was send from one PC to another via TCP/IP using binary mode ???
+								std::ofstream ofs(path + L"\\" + converter.from_bytes(fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string()), std::ofstream::out | std::ofstream::binary);
+								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
 							}
 							ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
 						}
+					}
+					if (SDL_PointInFRect(&mousePos, &downloadBtnR)) {
+						// TODO: Don't allow to overwrite existing files
+						std::wstring path;
+						{
+							wchar_t* p = 0;
+							SHGetKnownFolderPath(FOLDERID_Downloads, 0, 0, &p);
+							std::wstringstream ss;
+							ss << p;
+							path = ss.str();
+							CoTaskMemFree(static_cast<void*>(p));
+						}
+						{
+							std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+							for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+								// TODO: Are there any possible errors because of the fact that this file was send from one PC to another via TCP/IP using binary mode ???
+								std::ofstream ofs(path + L"\\" + converter.from_bytes(fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string()), std::ofstream::out | std::ofstream::binary);
+								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+							}
+						}
+						ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1579,13 +1662,45 @@ int main(int argc, char* argv[])
 					realMousePos.y = event.motion.y;
 				}
 				if (event.type == SDL_MOUSEWHEEL) {
-					if (event.wheel.y > 0) // scroll up
-					{
-						scroll = Scroll::Up;
+					if (SDL_PointInFRect(&mousePos, &contentR)) {
+						if (event.wheel.y > 0) // scroll up
+						{
+							scroll = Scroll::Up;
+						}
+						else if (event.wheel.y < 0) // scroll down
+						{
+							scroll = Scroll::Down;
+						}
 					}
-					else if (event.wheel.y < 0) // scroll down
-					{
-						scroll = Scroll::Down;
+					else if (SDL_PointInFRect(&mousePos, &attachmentR)) {
+						if (event.wheel.y > 0) // scroll up
+						{
+							if (!ml.messages[messageIndexToShow].attachments.empty()) {
+								float minY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
+								for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+									minY = std::min(minY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
+								}
+								if (minY < attachmentR.y) {
+									for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
+										attachment.text.dstR.y += attachment.text.dstR.h;
+									}
+								}
+							}
+						}
+						else if (event.wheel.y < 0) // scroll down
+						{
+							if (!ml.messages[messageIndexToShow].attachments.empty()) {
+								float maxY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
+								for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+									maxY = std::max(maxY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
+								}
+								if (maxY >= attachmentR.y + attachmentR.h) {
+									for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
+										attachment.text.dstR.y -= attachment.text.dstR.h;
+									}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -1637,8 +1752,12 @@ int main(int argc, char* argv[])
 			}
 			attachmentsText.draw(renderer);
 			for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-				ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
+				if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h &&
+					ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
+					ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
+				}
 			}
+			SDL_RenderCopyF(renderer, downloadT, 0, &downloadBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageSend) {
@@ -1727,11 +1846,11 @@ int main(int argc, char* argv[])
 								// TODO: Is it going to handle path from some exotic languages correctly??? - it requires u8 for Polish, what about others???
 								msAttachments.push_back(Attachment());
 								std::string path = NFD_PathSet_GetPath(&outPaths, i);
-								msAttachments.back().fileContent = readWholeFile(path);
-								msAttachments.back().filename = fs::path(path).filename().string();
+								msAttachments.back().fileContent = readWholeFileInBinary(path);
+								msAttachments.back().path = path;
 								msAttachments.back().text.autoAdjustW = true;
 								msAttachments.back().text.wMultiplier = 0.2;
-								msAttachments.back().text.setText(renderer, robotoF, msAttachments.back().filename, { TEXT_COLOR });
+								msAttachments.back().text.setText(renderer, robotoF, fs::path(msAttachments.back().path).filename().string(), { TEXT_COLOR });
 								msAttachments.back().text.dstR.h = 20;
 								msAttachments.back().text.dstR.x = 0;
 								if (msAttachments.size() == 1) {
@@ -1990,7 +2109,7 @@ int main(int argc, char* argv[])
 						shouldRunRecordingThread = true;
 						});
 					t1.detach();
-					}
+				}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {
@@ -2033,7 +2152,7 @@ int main(int argc, char* argv[])
 						});
 					t2.detach();
 				}
-				}
+			}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -2045,8 +2164,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-			}
 		}
+			}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-	}
+			}
