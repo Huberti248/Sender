@@ -1,7 +1,6 @@
 ﻿/*
 TODO:
-- Think what might happen if I'm reading/writing in binary mode files and sending them via at least 3 machines (user,server,user and user might login on a different PC and server db might be moved as well)
-- Make download all button bigger in message content + rename it on the picture from "pobierz" to "pobierz wszystkie"
+- When adding large amount of attachments the program doesn't respond. Display some info about it?
 */
 #include <iostream>
 #include <fstream>
@@ -434,7 +433,7 @@ void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInpu
 	for (int i = 0; i < attachments.size(); ++i) {
 		packet
 			<< attachments[i].path
-			<< attachments[i].fileContent;
+			<< attachments[i].fileContent.c_str();
 	}
 	socket.send(packet); // TODO: Do something on fail + put it on separate thread?
 	msNameInputText.setText(renderer, font, "");
@@ -1058,21 +1057,31 @@ int main(int argc, char* argv[])
 	Text attachmentsText;
 	attachmentsText.setText(renderer, robotoF, u8"Załączniki", { 255,255,255 });
 	attachmentsText.dstR.w = 70;
-	attachmentsText.dstR.h = 20;
+	attachmentsText.dstR.h = 32;
 	attachmentsText.dstR.x = windowWidth / 2 - attachmentsText.dstR.w / 2;
 	attachmentsText.dstR.y = contentR.y + contentR.h;
 	attachmentsText.autoAdjustW = true;
 	SDL_FRect attachmentR;
 	attachmentR.x = 0;
 	attachmentR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
-	attachmentR.w = windowWidth;
+	attachmentR.w = windowWidth / 2.f;
 	attachmentR.h = windowHeight - attachmentR.y;
 	SDL_Texture* downloadT = IMG_LoadTexture(renderer, "res/download.png");
 	SDL_FRect downloadBtnR;
-	downloadBtnR.w = 64;
-	downloadBtnR.h = 20;
+	downloadBtnR.w = 128;
+	downloadBtnR.h = 32;
 	downloadBtnR.x = 0;
 	downloadBtnR.y = attachmentsText.dstR.y;
+	SDL_FRect attachmentsScrollR;
+	attachmentsScrollR.w = 20;
+	attachmentsScrollR.h = attachmentR.h;
+	attachmentsScrollR.x = attachmentR.x + attachmentR.w;
+	attachmentsScrollR.y = attachmentR.y;
+	SDL_FRect attachmentsScrollBtnR;
+	attachmentsScrollBtnR.w = attachmentsScrollR.w;
+	attachmentsScrollBtnR.h = 30;
+	attachmentsScrollBtnR.x = attachmentsScrollR.x;
+	attachmentsScrollBtnR.y = attachmentsScrollR.y;
 #endif
 #if 1 // NOTE: MessageSend
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
@@ -1156,8 +1165,18 @@ int main(int argc, char* argv[])
 	SDL_FRect msAttachmentR;
 	msAttachmentR.x = 0;
 	msAttachmentR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
-	msAttachmentR.w = windowWidth;
+	msAttachmentR.w = windowWidth/2.f;
 	msAttachmentR.h = msSendBtnR.y - msAttachmentR.y;
+	SDL_FRect msAttachmentsScrollR;
+	msAttachmentsScrollR.w = 20;
+	msAttachmentsScrollR.h = msAttachmentR.h;
+	msAttachmentsScrollR.x = msAttachmentR.x + msAttachmentR.w;
+	msAttachmentsScrollR.y = msAttachmentR.y;
+	SDL_FRect msAttachmentsScrollBtnR;
+	msAttachmentsScrollBtnR.w = msAttachmentsScrollR.w;
+	msAttachmentsScrollBtnR.h = 30;
+	msAttachmentsScrollBtnR.x = msAttachmentsScrollR.x;
+	msAttachmentsScrollBtnR.y = msAttachmentsScrollR.y;
 #endif
 #if 1 // NOTE: Call
 	bool isDisconnectedLocally = false;
@@ -1280,7 +1299,7 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
-						}
+				}
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
 					for (int i = 0; i < ml.messages.size(); ++i) {
@@ -1366,7 +1385,7 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
-					}
+				}
 				if (event.type == SDL_MOUSEMOTION) {
 					float scaleX, scaleY;
 					SDL_RenderGetScale(renderer, &scaleX, &scaleY);
@@ -1672,7 +1691,7 @@ int main(int argc, char* argv[])
 							scroll = Scroll::Down;
 						}
 					}
-					else if (SDL_PointInFRect(&mousePos, &attachmentR)) {
+					else if (SDL_PointInFRect(&mousePos, &attachmentR) || SDL_PointInFRect(&mousePos, &attachmentsScrollR)) {
 						if (event.wheel.y > 0) // scroll up
 						{
 							if (!ml.messages[messageIndexToShow].attachments.empty()) {
@@ -1684,6 +1703,11 @@ int main(int argc, char* argv[])
 									for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
 										attachment.text.dstR.y += attachment.text.dstR.h;
 									}
+									float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+									float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
+									float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+									float min = 0;
+									attachmentsScrollBtnR.y -= (percent * (max - min) / 100) + min;
 								}
 							}
 						}
@@ -1698,6 +1722,11 @@ int main(int argc, char* argv[])
 									for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
 										attachment.text.dstR.y -= attachment.text.dstR.h;
 									}
+									float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+									float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
+									float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+									float min = 0;
+									attachmentsScrollBtnR.y += (percent * (max - min) / 100) + min;
 								}
 							}
 						}
@@ -1738,7 +1767,7 @@ int main(int argc, char* argv[])
 				}
 				scroll = Scroll::None;
 				for (Text& text : texts) {
-					if (text.dstR.y >= contentR.y) {
+					if (text.dstR.y >= contentR.y && text.dstR.y + text.dstR.h <= contentR.y + contentR.h) {
 						text.draw(renderer);
 					}
 				}
@@ -1758,6 +1787,10 @@ int main(int argc, char* argv[])
 				}
 			}
 			SDL_RenderCopyF(renderer, downloadT, 0, &downloadBtnR);
+			SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
+			SDL_RenderFillRectF(renderer, &attachmentsScrollR);
+			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
+			SDL_RenderFillRectF(renderer, &attachmentsScrollBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageSend) {
@@ -1896,6 +1929,11 @@ int main(int argc, char* argv[])
 								for (Attachment& attachment : msAttachments) {
 									attachment.text.dstR.y += attachment.text.dstR.h;
 								}
+								float maxVisible = msAttachmentR.h / msAttachments.front().text.dstR.h; // NOTE: Assume that items have same height
+								float percent = 100 / (msAttachments.size() - maxVisible);
+								float max = 0 + msAttachmentsScrollR.h - msAttachmentsScrollBtnR.h;
+								float min = 0;
+								msAttachmentsScrollBtnR.y -= (percent * (max - min) / 100) + min;
 							}
 						}
 					}
@@ -1910,6 +1948,11 @@ int main(int argc, char* argv[])
 								for (Attachment& attachment : msAttachments) {
 									attachment.text.dstR.y -= attachment.text.dstR.h;
 								}
+								float maxVisible = msAttachmentR.h / msAttachments.front().text.dstR.h; // NOTE: Assume that items have same height
+								float percent = 100 / (msAttachments.size() - maxVisible);
+								float max = 0 + msAttachmentsScrollR.h - msAttachmentsScrollBtnR.h;
+								float min = 0;
+								msAttachmentsScrollBtnR.y += (percent * (max - min) / 100) + min;
 							}
 						}
 					}
@@ -2008,6 +2051,10 @@ int main(int argc, char* argv[])
 					msAttachments[i].text.draw(renderer);
 				}
 			}
+			SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
+			SDL_RenderFillRectF(renderer, &msAttachmentsScrollR);
+			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
+			SDL_RenderFillRectF(renderer, &msAttachmentsScrollBtnR);
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::Call) {
@@ -2107,9 +2154,9 @@ int main(int argc, char* argv[])
 						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						shouldRunRecordingThread = true;
-						});
+				});
 					t1.detach();
-				}
+			}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {
@@ -2152,7 +2199,7 @@ int main(int argc, char* argv[])
 						});
 					t2.detach();
 				}
-			}
+		}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -2164,8 +2211,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-		}
-			}
+	}
+}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-			}
+}
