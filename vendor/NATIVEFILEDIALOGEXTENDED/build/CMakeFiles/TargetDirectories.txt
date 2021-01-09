@@ -1,0 +1,10 @@
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/CMakeFiles/ALL_BUILD.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/CMakeFiles/ZERO_CHECK.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/src/CMakeFiles/nfd.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_opendialog_c.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_opendialog_cpp_cpp.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_opendialogmultiple_c.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_opendialogmultiple_cpp_cpp.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_pickfolder_c.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_pickfolder_cpp_cpp.dir
+C:/home/dev/Sender/vendor/NATIVEFILEDIALOGEXTENDED/build/test/CMakeFiles/test_savedialog_c.dir

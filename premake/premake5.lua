@@ -62,7 +62,7 @@ project "Sender"
 		"../vendor/GTK/include/pango-1.0",
 		"../vendor/GTK/include/pixman-1",
 		"../vendor/GTK/lib/glib-2.0/include",
-		"../vendor/NATIVEFILEDIALOG/src/include",
+		"../vendor/NATIVEFILEDIALOGEXTENDED/src/include",
     }
    
     libdirs{
@@ -76,7 +76,7 @@ project "Sender"
         "../vendor/SFML/lib",
         "../vendor/CURL/lib",
         "../vendor/GTK/lib",
-        "../vendor/NATIVEFILEDIALOG/build/lib/Debug/x86",
+        "../vendor/NATIVEFILEDIALOGEXTENDED/lib/x86",
     }
 
     links{
@@ -148,7 +148,7 @@ project "Sender"
 		"turbojpeg-static.lib",
 		"turbojpeg.lib",
 		"zlib1.lib",
-		"nfd_d.lib",
+		"nfd.lib",
     }
 
 	files{

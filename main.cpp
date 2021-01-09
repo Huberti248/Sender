@@ -1,6 +1,8 @@
 ﻿/*
 TODO:
-- When adding large amount of attachments the program doesn't respond. Display some info about it?
+- When adding attachments with big size the program doesn't respond. Display some info about it?
+- Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
+- Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 */
 #include <iostream>
 #include <fstream>
@@ -16,6 +18,7 @@ TODO:
 #include <ctime>
 #include <cstdlib>
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <SDL_image.h>
 #include <SDL_ttf.h>
 #include <SDL_mixer.h>
@@ -53,6 +56,7 @@ namespace fs = std::filesystem;
 #ifdef _WIN32
 #include <windows.h>
 #include <Shlobj.h>
+#include <shellapi.h>
 #endif
 
 using namespace std::chrono_literals;
@@ -77,6 +81,9 @@ bool keys[SDL_NUM_SCANCODES];
 bool buttons[SDL_BUTTON_X2 + 1];
 SDL_Renderer* renderer;
 std::string prefPath;
+std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+//std::string narrow = converter.to_bytes(wide_utf16_source_string);
+//std::wstring wide = converter.from_bytes(narrow_utf8_source_string);
 
 #ifndef RELEASE
 #define SERVER
@@ -932,6 +939,7 @@ int main(int argc, char* argv[])
 	SDL_LogSetOutputFunction(logOutputCallback, 0);
 	SDL_Init(SDL_INIT_EVERYTHING);
 	TTF_Init();
+	NFD_Init();
 	SDL_GetMouseState(&mousePos.x, &mousePos.y);
 #ifdef SERVER
 	std::thread t([&] {
@@ -1165,7 +1173,7 @@ int main(int argc, char* argv[])
 	SDL_FRect msAttachmentR;
 	msAttachmentR.x = 0;
 	msAttachmentR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
-	msAttachmentR.w = windowWidth/2.f;
+	msAttachmentR.w = windowWidth / 2.f;
 	msAttachmentR.h = msSendBtnR.y - msAttachmentR.y;
 	SDL_FRect msAttachmentsScrollR;
 	msAttachmentsScrollR.w = 20;
@@ -1294,9 +1302,9 @@ int main(int argc, char* argv[])
 					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
 						ml.isNameSelected = !ml.isNameSelected;
-					}
-#endif
 				}
+#endif
+			}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
 				}
@@ -1343,12 +1351,14 @@ int main(int argc, char* argv[])
 									}
 								}
 								scrollBtnR.y = scrollR.y;
+								attachmentsScrollBtnR.y = attachmentsScrollR.y;
 								break;
 							}
 						}
 					}
 					if (SDL_PointInFRect(&mousePos, &ml.writeMessageBtnR)) {
 						state = State::MessageSend;
+						msAttachmentsScrollBtnR.y = msAttachmentsScrollR.y;
 					}
 #ifdef CALL
 					else if (SDL_PointInFRect(&mousePos, &ml.nameR)) {
@@ -1437,9 +1447,9 @@ int main(int argc, char* argv[])
 					}
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
-					}
+		}
 #endif
-				}
+	}
 			}
 #ifdef CALL
 			if (isCaller) {
@@ -1461,7 +1471,7 @@ int main(int argc, char* argv[])
 					ml.isNameSelected = true;
 					state = State::Call;
 				}
-			}
+}
 #endif
 			sf::Packet sentPacket;
 			sentPacket << PacketType::ReceiveMessages << nameInputText.text;
@@ -1604,7 +1614,7 @@ int main(int argc, char* argv[])
 			}
 #endif
 			SDL_RenderPresent(renderer);
-		}
+									}
 		else if (state == State::MessageContent) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
@@ -1627,8 +1637,7 @@ int main(int argc, char* argv[])
 						state = State::MessageList;
 					}
 					for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-						if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR)) {
-							// TODO: Don't allow to overwrite existing files
+						if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR) && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentsScrollR.y) {
 							std::wstring path;
 							{
 								wchar_t* p = 0;
@@ -1639,16 +1648,32 @@ int main(int argc, char* argv[])
 								CoTaskMemFree(static_cast<void*>(p));
 							}
 							{
-								std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-								// TODO: Are there any possible errors because of the fact that this file was send from one PC to another via TCP/IP using binary mode ???
-								std::ofstream ofs(path + L"\\" + converter.from_bytes(fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string()), std::ofstream::out | std::ofstream::binary);
-								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+								std::string filename = fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string();
+								std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
+								bool shouldSave = true;
+								if (fs::exists(finalPath)) {
+									SDL_SysWMinfo wmInfo;
+									SDL_VERSION(&wmInfo.version);
+									SDL_GetWindowWMInfo(window, &wmInfo);
+									HWND hwnd = wmInfo.info.win.window;
+									std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
+									int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
+									if (result == IDYES) {
+										;
+									}
+									else if (result == IDNO) {
+										shouldSave = false;
+									}
+								}
+								if (shouldSave) {
+									std::ofstream ofs(finalPath, std::ofstream::out | std::ofstream::binary);
+									ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+									ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
+								}
 							}
-							ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
 						}
 					}
 					if (SDL_PointInFRect(&mousePos, &downloadBtnR)) {
-						// TODO: Don't allow to overwrite existing files
 						std::wstring path;
 						{
 							wchar_t* p = 0;
@@ -1659,11 +1684,28 @@ int main(int argc, char* argv[])
 							CoTaskMemFree(static_cast<void*>(p));
 						}
 						{
-							std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 							for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-								// TODO: Are there any possible errors because of the fact that this file was send from one PC to another via TCP/IP using binary mode ???
-								std::ofstream ofs(path + L"\\" + converter.from_bytes(fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string()), std::ofstream::out | std::ofstream::binary);
-								ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+								std::string filename = fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string();
+								std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
+								bool shouldSave = true;
+								if (fs::exists(finalPath)) {
+									SDL_SysWMinfo wmInfo;
+									SDL_VERSION(&wmInfo.version);
+									SDL_GetWindowWMInfo(window, &wmInfo);
+									HWND hwnd = wmInfo.info.win.window;
+									std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
+									int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
+									if (result == IDYES) {
+										;
+									}
+									else if (result == IDNO) {
+										shouldSave = false;
+									}
+								}
+								if (shouldSave) {
+									std::ofstream ofs(finalPath, std::ofstream::out | std::ofstream::binary);
+									ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+								}
 							}
 						}
 						ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
@@ -1872,28 +1914,39 @@ int main(int argc, char* argv[])
 						sendMessage(socket, msNameInputText, msTopicInputText, msContentInputText, nameInputText, msSelectedWidget, renderer, robotoF, msAttachments);
 					}
 					if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
-						nfdpathset_t outPaths;
-						nfdresult_t result = NFD_OpenDialogMultiple(0, 0, &outPaths);
+						const nfdpathset_t* outPaths;
+						nfdresult_t result = NFD_OpenDialogMultipleN(&outPaths, 0, 0, 0);
 						if (result == NFD_OKAY) {
-							for (int i = 0; i < NFD_PathSet_GetCount(&outPaths); ++i) {
-								// TODO: Is it going to handle path from some exotic languages correctly??? - it requires u8 for Polish, what about others???
-								msAttachments.push_back(Attachment());
-								std::string path = NFD_PathSet_GetPath(&outPaths, i);
-								msAttachments.back().fileContent = readWholeFileInBinary(path);
-								msAttachments.back().path = path;
-								msAttachments.back().text.autoAdjustW = true;
-								msAttachments.back().text.wMultiplier = 0.2;
-								msAttachments.back().text.setText(renderer, robotoF, fs::path(msAttachments.back().path).filename().string(), { TEXT_COLOR });
-								msAttachments.back().text.dstR.h = 20;
-								msAttachments.back().text.dstR.x = 0;
-								if (msAttachments.size() == 1) {
-									msAttachments.back().text.dstR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
-								}
-								else {
-									msAttachments.back().text.dstR.y = msAttachments[msAttachments.size() - 2].text.dstR.y + msAttachments[msAttachments.size() - 2].text.dstR.h;
+							nfdpathsetsize_t count;
+							nfdresult_t result = NFD_PathSet_GetCount(outPaths, &count);
+							if (result == NFD_OKAY) {
+								for (int i = 0; i < count; ++i) {
+									nfdnchar_t* outPath;
+									nfdresult_t result = NFD_PathSet_GetPathN(outPaths, i, &outPath);
+									if (result == NFD_OKAY) {
+										std::ifstream ifs(outPath, std::ifstream::in | std::ifstream::binary);
+										std::stringstream ss;
+										ss << ifs.rdbuf();
+										msAttachments.push_back(Attachment());
+										msAttachments.back().fileContent = ss.str();
+										std::wstring outPathStr(outPath);
+										msAttachments.back().path = converter.to_bytes(outPathStr);
+										msAttachments.back().text.autoAdjustW = true;
+										msAttachments.back().text.wMultiplier = 0.2;
+										msAttachments.back().text.setText(renderer, robotoF, fs::path(msAttachments.back().path).filename().string(), { TEXT_COLOR });
+										msAttachments.back().text.dstR.h = 20;
+										msAttachments.back().text.dstR.x = 0;
+										if (msAttachments.size() == 1) {
+											msAttachments.back().text.dstR.y = msAttachmentsText.dstR.y + msAttachmentsText.dstR.h;
+										}
+										else {
+											msAttachments.back().text.dstR.y = msAttachments[msAttachments.size() - 2].text.dstR.y + msAttachments[msAttachments.size() - 2].text.dstR.h;
+										}
+										NFD_PathSet_FreePathN(outPath);
+									}
 								}
 							}
-							NFD_PathSet_Free(&outPaths);
+							NFD_PathSet_Free(outPaths);
 						}
 					}
 					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
@@ -2154,9 +2207,9 @@ int main(int argc, char* argv[])
 						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						shouldRunRecordingThread = true;
-				});
+						});
 					t1.detach();
-			}
+				}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {
@@ -2199,7 +2252,7 @@ int main(int argc, char* argv[])
 						});
 					t2.detach();
 				}
-		}
+			}
 
 			r.x += dx;
 			if (r.x + r.w > windowWidth || r.x < 0) {
@@ -2211,8 +2264,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-	}
-}
+		}
+							}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-}
+						}
