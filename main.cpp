@@ -3,6 +3,12 @@ TODO:
 - When adding attachments with big size the program doesn't respond. Display some info about it?
 - Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
 - Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
+- Replace buttons to black one witch shadows + gold like font color (like on SDL2 website)
+- Improve scroll apperance in message send state (white bg color up and black bg color below, matching scroll)
+- When std::wstring is send to the server, std::wstring should be received from client on the server
+- Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
+- Chekout getSize() and popBack() functions for exotic characters as well as remember to use them for every place where polish character might be placed
+- Before final release remember to delete not used code from the server (in case of security)
 */
 #include <iostream>
 #include <fstream>
@@ -92,9 +98,21 @@ std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 #define TEXT_COLOR 0,0,0,0
 #define SERVER_PORT 4800 // TODO: Set some other port?
 
+#define i8 sf::Int8
+#define i16 sf::Int16
+#define i32 sf::Int32
+#define i64 sf::Int64
+#define u8 sf::Uint8
+#define u16 sf::Uint16
+#define u32 sf::Uint32
+#define u64 sf::Uint64
+
 #undef SendMessage
 
-enum PacketType {
+enum PacketType : i32 {
+	Login,
+	LoginSuccess,
+	LoginFailure,
 	SendMessage,
 	ReceiveMessages,
 	MakeCall,
@@ -112,6 +130,16 @@ enum PacketType {
 	DisconnectCall,
 	DoesCallExits,
 };
+
+std::wstring toWstring(std::string str)
+{
+	return converter.from_bytes(str);
+}
+
+std::string toStdString(std::wstring str)
+{
+	return converter.to_bytes(str);
+}
 
 void logOutputCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
 {
@@ -279,6 +307,14 @@ int eventWatch(void* userdata, SDL_Event* event)
 	return 0;
 }
 
+sf::Packet& operator >>(sf::Packet& packet, PacketType& packetType)
+{
+	i32 tmp;
+	packet >> tmp;
+	packetType = (PacketType)tmp;
+	return packet;
+}
+
 // Get current date/time, format is YYYY-MM-DD HH:mm:ss
 std::string currentDateTime()
 {
@@ -411,7 +447,7 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 			break;
 		}
 		else {
-			text.text.erase(0, 1);
+			text.text.erase(0, 1); // TODO: If the first character is a wide character (e.g. polish character) it might show some other character (like question mark in a triangle) if it will be narrower than the previous one and after erase text will match loop statament
 			text.setText(renderer, font, text.text, { TEXT_COLOR });
 		}
 	}
@@ -524,17 +560,38 @@ void runServer()
 						{
 							pugi::xml_document doc;
 							pugi::xml_node rootNode = doc.append_child("root");
+							pugi::xml_node usersNode = rootNode.append_child("users");
+							pugi::xml_node messagesNode = rootNode.append_child("messages");
 							doc.save_file((prefPath + "data.xml").c_str());
 						}
 						sf::Packet packet;
 						if (clients[i].socket->receive(packet) == sf::Socket::Done) {
 							PacketType packetType;
-							{
-								int tmp;
-								packet >> tmp;
-								packetType = (PacketType)tmp;
+							packet >> packetType;
+							if (packetType == PacketType::Login) {
+								std::string name, password;
+								packet >> name >> password;
+								pugi::xml_document doc;
+								doc.load_file((prefPath + "data.xml").c_str());
+								auto userNodes = doc.child("root").child("users").children("user");
+								bool found = false;
+								for (auto& userNode : userNodes) {
+									if (userNode.child("name").text().as_string() == name &&
+										userNode.child("password").text().as_string() == password) {
+										found = true;
+										break;
+									}
+								}
+								sf::Packet answerPacket;
+								if (found) {
+									answerPacket << PacketType::LoginSuccess;
+								}
+								else {
+									answerPacket << PacketType::LoginFailure;
+								}
+								clients[i].socket->send(answerPacket);
 							}
-							if (packetType == PacketType::SendMessage) {
+							else if (packetType == PacketType::SendMessage) {
 								std::string msNameInputText;
 								std::string msTopicInputText;
 								std::string msContentInputText;
@@ -546,7 +603,7 @@ void runServer()
 								int maxId = 0;
 #if 1 // NOTE: Find max id
 								{
-									auto messageNodes = rootNode.children("message");
+									auto messageNodes = rootNode.child("messages").children("message");
 									for (auto messageNode : messageNodes) {
 										int id = messageNode.child("id").text().as_int();
 										if (id > maxId) {
@@ -555,7 +612,8 @@ void runServer()
 									}
 								}
 #endif
-								pugi::xml_node messageNode = rootNode.append_child("message");
+
+								pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
 								pugi::xml_node idNode = messageNode.append_child("id");
 								pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
 								pugi::xml_node topicNode = messageNode.append_child("topic");
@@ -597,7 +655,7 @@ void runServer()
 								packet >> name;
 								pugi::xml_document doc;
 								doc.load_file((prefPath + "data.xml").c_str());
-								auto messageNodes = doc.child("root").children("message");
+								auto messageNodes = doc.child("root").child("messages").children("message");
 								sf::Packet answerPacket;
 								for (pugi::xml_node& messageNode : messageNodes) {
 									if (messageNode.child("receiverName").text().as_string() == name) {
@@ -931,6 +989,45 @@ struct MessageList {
 	CallState callState = CallState::None;
 };
 
+void popBack(std::string& buffer)
+{
+	std::size_t textlen = SDL_strlen(buffer.c_str());
+	do {
+		if (textlen == 0) {
+			break;
+		}
+		if ((buffer[textlen - 1] & 0x80) == 0x00) {
+			/* One byte */
+			buffer.erase(textlen - 1);
+			break;
+		}
+		if ((buffer[textlen - 1] & 0xC0) == 0x80) {
+			/* Byte from the multibyte sequence */
+			buffer.erase(textlen - 1);
+			textlen--;
+			if (textlen == 0) { break; } // invalid character
+		}
+		if ((buffer[textlen - 1] & 0xC0) == 0xC0) {
+			/* First byte of multibyte sequence */
+			buffer.erase(textlen - 1);
+			break;
+		}
+	} while (true);
+}
+
+std::size_t getSize(std::string buffer)
+{
+	std::size_t textlen = SDL_strlen(buffer.c_str());
+	std::size_t realTextlen = textlen;
+	for (std::size_t i = 0; i < textlen; ++i) {
+		if ((buffer[i] & 0xC0) == 0x80) // NOTE: Byte from the multibyte sequence
+		{
+			--realTextlen;
+		}
+	}
+	return realTextlen;
+}
+
 int main(int argc, char* argv[])
 {
 	prefPath = SDL_GetPrefPath("Huberti", "Sender");
@@ -976,7 +1073,7 @@ int main(int argc, char* argv[])
 	nameR.w = 200;
 	nameR.h = 30;
 	nameR.x = windowWidth / 2 - nameR.w / 2;
-	nameR.y = windowHeight / 2;
+	nameR.y = windowHeight / 2.f - nameR.h - 10;
 	Text nameText;
 	nameText.setText(renderer, robotoF, u8"Nazwa");
 	nameText.dstR.w = 60;
@@ -990,6 +1087,29 @@ int main(int argc, char* argv[])
 	nameInputText.autoAdjustW = true;
 	nameInputText.wMultiplier = 0.5;
 	bool isNameSelected = true;
+	Text passwordText;
+	passwordText.setText(renderer, robotoF, u8"Hasło");
+	passwordText.dstR.w = 60;
+	passwordText.dstR.h = 20;
+	passwordText.dstR.x = windowWidth / 2 - passwordText.dstR.w / 2;
+	passwordText.dstR.y = windowHeight / 2.f + 10;
+	SDL_FRect passwordR;
+	passwordR.w = 200;
+	passwordR.h = 30;
+	passwordR.x = windowWidth / 2 - passwordR.w / 2;
+	passwordR.y = passwordText.dstR.y + passwordText.dstR.h;
+	Text passwordInputText;
+	passwordInputText.setText(renderer, robotoF, "");
+	passwordInputText.dstR = passwordR;
+	passwordInputText.dstR.x += 3;
+	passwordInputText.autoAdjustW = true;
+	passwordInputText.wMultiplier = 0.5;
+	Text infoText;
+	infoText.setText(renderer, robotoF, "");
+	infoText.dstR.w = 300;
+	infoText.dstR.h = 20;
+	infoText.dstR.x = 15;
+	infoText.dstR.y = windowHeight - infoText.dstR.h - 15;
 #endif
 #if 1 // NOTE: MessageList
 	MessageList ml;
@@ -1226,13 +1346,43 @@ int main(int argc, char* argv[])
 					if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 						if (isNameSelected) {
 							if (!nameInputText.text.empty()) {
-								nameInputText.text.pop_back();
+								popBack(nameInputText.text);
 								nameInputText.setText(renderer, robotoF, nameInputText.text, { TEXT_COLOR });
+							}
+						}
+						else {
+							if (!passwordInputText.text.empty()) {
+								popBack(passwordInputText.text);
+								passwordInputText.setText(renderer, robotoF, passwordInputText.text, { TEXT_COLOR });
 							}
 						}
 					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-						state = State::MessageList;
+						/*
+						TODO:
+							Someone might modify program behaviour and get into later states. Protect againts that.
+							Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
+
+							One way to fix it might be to add user name to struct Client on server side + add bool isLoggedIn + check both before sending all user messages from db to client on
+							PacketType::ReceiveMessages (then there is no need to send user name from user to the server anymore I guess - it might be got from clients[i].[...])
+						*/
+
+						// TODO: Encrypt the data on the client and decrypt it on the server
+						// TODO: Make sure that it will be safe (no one would be able to steal login and password)
+						// TODO: Prevent brute force - connection: (slowdown? timeout? capatche?)
+						sf::Packet p;
+						p << PacketType::Login << nameInputText.text << passwordInputText.text;
+						socket.send(p); // TODO: Do something on fail + put it on separate thread?
+						sf::Packet receivePacket;
+						socket.receive(receivePacket); // TODO: Do something on fail + put it on separate thread?
+						PacketType receivePacketType;
+						receivePacket >> receivePacketType;
+						if (receivePacketType == PacketType::LoginSuccess) {
+							state = State::MessageList;
+						}
+						else if (receivePacketType == PacketType::LoginFailure) {
+							infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
+						}
 					}
 				}
 				if (event.type == SDL_KEYUP) {
@@ -1242,6 +1392,9 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &nameR)) {
 						isNameSelected = true;
+					}
+					else if (SDL_PointInFRect(&mousePos, &passwordR)) {
+						isNameSelected = false;
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1259,6 +1412,9 @@ int main(int argc, char* argv[])
 					if (isNameSelected) {
 						nameInputText.setText(renderer, robotoF, nameInputText.text + event.text.text, { TEXT_COLOR });
 					}
+					else {
+						passwordInputText.setText(renderer, robotoF, passwordInputText.text + event.text.text, { TEXT_COLOR });
+					}
 				}
 			}
 			SDL_SetRenderDrawColor(renderer, BG_COLOR);
@@ -1271,6 +1427,22 @@ int main(int argc, char* argv[])
 			}
 			nameText.draw(renderer);
 			drawInBorders(nameInputText, nameR, renderer, robotoF);
+
+			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+			SDL_RenderFillRectF(renderer, &passwordR);
+			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
+			if (!isNameSelected) {
+				SDL_RenderDrawRectF(renderer, &passwordR);
+			}
+			passwordText.draw(renderer);
+
+			std::string currPassword = passwordInputText.text;
+			passwordInputText.setText(renderer, robotoF, std::string(getSize(currPassword), '*'), { TEXT_COLOR });
+			drawInBorders(passwordInputText, passwordR, renderer, robotoF);
+			passwordInputText.setText(renderer, robotoF, currPassword, { TEXT_COLOR });
+
+			infoText.draw(renderer);
+
 			SDL_RenderPresent(renderer);
 		}
 		else if (state == State::MessageList) {
@@ -1298,13 +1470,13 @@ int main(int argc, char* argv[])
 								ml.surnameInputText.text.pop_back();
 								ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text, { TEXT_COLOR });
 							}
-						}
-					}
+			}
+		}
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
 						ml.isNameSelected = !ml.isNameSelected;
-				}
+					}
 #endif
-			}
+	}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
 				}
@@ -1390,9 +1562,9 @@ int main(int argc, char* argv[])
 						isCaller = false;
 						receiverName = nameInputText.text;
 						receiverSurname = surnameInputText.text;
-					}
+							}
 #endif
-				}
+						}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
 				}
@@ -1439,7 +1611,7 @@ int main(int argc, char* argv[])
 							}
 						}
 					}
-				}
+								}
 				if (event.type == SDL_TEXTINPUT) {
 #ifdef CALL
 					if (ml.isNameSelected) {
@@ -1447,9 +1619,9 @@ int main(int argc, char* argv[])
 					}
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
-		}
+					}
 #endif
-	}
+				}
 			}
 #ifdef CALL
 			if (isCaller) {
@@ -1471,7 +1643,7 @@ int main(int argc, char* argv[])
 					ml.isNameSelected = true;
 					state = State::Call;
 				}
-}
+							}
 #endif
 			sf::Packet sentPacket;
 			sentPacket << PacketType::ReceiveMessages << nameInputText.text;
@@ -1603,7 +1775,7 @@ int main(int argc, char* argv[])
 			}
 			else {
 				SDL_RenderDrawRectF(renderer, &ml.surnameR);
-			}
+				}
 			ml.nameText.draw(renderer);
 			ml.surnameText.draw(renderer);
 			drawInBorders(ml.nameInputText, ml.nameR, renderer, robotoF);
@@ -1614,7 +1786,7 @@ int main(int argc, char* argv[])
 			}
 #endif
 			SDL_RenderPresent(renderer);
-									}
+			}
 		else if (state == State::MessageContent) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
@@ -1845,7 +2017,7 @@ int main(int argc, char* argv[])
 					if (event.type == SDL_KEYDOWN) {
 						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 							if (!msNameInputText.text.empty()) {
-								msNameInputText.text.pop_back();
+								popBack(msNameInputText.text);
 								msNameInputText.setText(renderer, robotoF, msNameInputText.text, { TEXT_COLOR });
 							}
 						}
@@ -1858,7 +2030,7 @@ int main(int argc, char* argv[])
 					if (event.type == SDL_KEYDOWN) {
 						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 							if (!msTopicInputText.text.empty()) {
-								msTopicInputText.text.pop_back();
+								popBack(msTopicInputText.text);
 								msTopicInputText.setText(renderer, robotoF, msTopicInputText.text, { TEXT_COLOR });
 							}
 						}
@@ -1872,7 +2044,7 @@ int main(int argc, char* argv[])
 					if (event.type == SDL_KEYDOWN) {
 						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 							if (!msContentInputText.text.empty()) {
-								msContentInputText.text.pop_back();
+								popBack(msContentInputText.text);
 								if (!msContentInputText.text.empty() && msContentInputText.text.back() == '\036') {
 									msContentInputText.text.pop_back();
 								}
@@ -2265,7 +2437,7 @@ int main(int argc, char* argv[])
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
 		}
-							}
+						}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-						}
+					}
