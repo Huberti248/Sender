@@ -9,6 +9,11 @@ TODO:
 - Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
 - Chekout getSize() and popBack() functions for exotic characters as well as remember to use them for every place where polish character might be placed
 - Before final release remember to delete not used code from the server (in case of security)
+- Some mechanism to automatically disconnect some clients which haven't responded for a very long time?
+- Checkout have many clients could be connected to the server at the same time + handle situation when server is full
+- Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
+- It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
+- ChetEngineLoginWithoutPassword Set 1. nameInputText.text to "b" (this could be done in GUI) 2. state=State::MessageList 3. does it allow to login without password and receive messages???
 */
 #include <iostream>
 #include <fstream>
@@ -34,6 +39,24 @@ TODO:
 #include <SFML/Audio.hpp>
 //#include <SFML/Graphics.hpp>
 #include <nfd.h>
+#include <aes.h>
+#include <gcm.h>
+#include <cryptlib.h>
+#include <osrng.h>
+#include <hex.h>
+#include <filters.h>
+#include <modes.h>
+#include <elgamal.h>
+#include <fhmqv.h>
+#include <hmqv.h>
+#include <mqv.h>
+#include <dh.h>
+#include <dh2.h>
+#include <assert.h>
+#include <hex.h>
+#include <cryptlib.h>
+#include <filters.h>
+#include <nbtheory.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -107,9 +130,13 @@ std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 #define u32 sf::Uint32
 #define u64 sf::Uint64
 
+const int TAG_SIZE = 12;
+
 #undef SendMessage
 
 enum PacketType : i32 {
+	TestMessage,
+	Dh,
 	Login,
 	LoginSuccess,
 	LoginFailure,
@@ -471,8 +498,7 @@ void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInpu
 		<< PacketType::SendMessage
 		<< msNameInputText.text
 		<< msTopicInputText.text
-		<< msContentInputText.text
-		<< nameInputText.text;
+		<< msContentInputText.text;
 	for (int i = 0; i < attachments.size(); ++i) {
 		packet
 			<< attachments[i].path
@@ -494,6 +520,8 @@ enum class Scroll {
 
 struct Client {
 	std::shared_ptr<sf::TcpSocket> socket;
+	std::string name;
+	bool isLogged = false;
 
 	Client()
 	{
@@ -568,7 +596,81 @@ void runServer()
 						if (clients[i].socket->receive(packet) == sf::Socket::Done) {
 							PacketType packetType;
 							packet >> packetType;
-							if (packetType == PacketType::Login) {
+#if 0
+							if (packetType == PacketType::Dh) {
+								// TODO: Disallow to do PacketType::Dh more than once???
+
+								CryptoPP::AutoSeededRandomPool prng;
+
+								prng.GenerateBlock(clients[i].aesKey, sizeof(clients[i].aesKey));
+
+								std::string publicKeyStr;
+								packet >> publicKeyStr;
+								CryptoPP::Integer publicKey(publicKeyStr.c_str());
+								publicKey.Encode(clients[i].aesKey, CryptoPP::AES::DEFAULT_KEYLENGTH);
+
+								sf::Packet answerPacket;
+								for (int j = 0; j < CryptoPP::AES::DEFAULT_KEYLENGTH; ++j) {
+									answerPacket << clients[i].aesKey[j];
+								}
+								clients[i].socket->send(answerPacket);
+							}
+							else if (packetType == PacketType::TestMessage) {
+								std::string rpdata;
+								byte iv[CryptoPP::AES::BLOCKSIZE];
+								std::string cipher;
+								packet >> cipher;
+								for (int i = 0; i < CryptoPP::AES::BLOCKSIZE; ++i) {
+									packet >> iv[i];
+								}
+								try {
+									CryptoPP::GCM< CryptoPP::AES >::Decryption d;
+									d.SetKeyWithIV(clients[i].aesKey, sizeof(clients[i].aesKey), iv, sizeof(iv));
+									// d.SpecifyDataLengths( 0, cipher.size()-TAG_SIZE, 0 );
+
+									CryptoPP::AuthenticatedDecryptionFilter df(d,
+										new CryptoPP::StringSink(rpdata),
+										CryptoPP::AuthenticatedDecryptionFilter::DEFAULT_FLAGS,
+										TAG_SIZE
+									); // AuthenticatedDecryptionFilter
+
+									// The StringSource dtor will be called immediately
+									//  after construction below. This will cause the
+									//  destruction of objects it owns. To stop the
+									//  behavior so we can get the decoding result from
+									//  the DecryptionFilter, we must use a redirector
+									//  or manually Put(...) into the filter without
+									//  using a StringSource.
+									CryptoPP::StringSource(cipher, true,
+										new CryptoPP::Redirector(df /*, PASS_EVERYTHING */)
+									); // StringSource
+
+									// If the object does not throw, here's the only
+									//  opportunity to check the data's integrity
+									bool b = df.GetLastResult();
+									assert(true == b);
+
+									std::cout << "recovered text: " << rpdata << std::endl;
+								}
+								catch (CryptoPP::HashVerificationFilter::HashVerificationFailed& e) {
+									std::cerr << "Caught HashVerificationFailed..." << std::endl;
+									std::cerr << e.what() << std::endl;
+									std::cerr << std::endl;
+								}
+								catch (CryptoPP::InvalidArgument& e) {
+									std::cerr << "Caught InvalidArgument..." << std::endl;
+									std::cerr << e.what() << std::endl;
+									std::cerr << std::endl;
+								}
+								catch (CryptoPP::Exception& e) {
+									std::cerr << "Caught Exception..." << std::endl;
+									std::cerr << e.what() << std::endl;
+									std::cerr << std::endl;
+								}
+
+							}
+#endif
+							else if (packetType == PacketType::Login) {
 								std::string name, password;
 								packet >> name >> password;
 								pugi::xml_document doc;
@@ -584,376 +686,382 @@ void runServer()
 								}
 								sf::Packet answerPacket;
 								if (found) {
+									// TODO: What will happen when someone will change it's IP address and sent some packet
 									answerPacket << PacketType::LoginSuccess;
+									clients[i].isLogged = true;
+									clients[i].name = name;
 								}
 								else {
 									answerPacket << PacketType::LoginFailure;
 								}
 								clients[i].socket->send(answerPacket);
 							}
-							else if (packetType == PacketType::SendMessage) {
-								std::string msNameInputText;
-								std::string msTopicInputText;
-								std::string msContentInputText;
-								std::string nameInputText;
-								packet >> msNameInputText >> msTopicInputText >> msContentInputText >> nameInputText;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								int maxId = 0;
-#if 1 // NOTE: Find max id
-								{
-									auto messageNodes = rootNode.child("messages").children("message");
-									for (auto messageNode : messageNodes) {
-										int id = messageNode.child("id").text().as_int();
-										if (id > maxId) {
-											maxId = id;
+							else {
+								if (clients[i].isLogged) {
+									if (packetType == PacketType::ReceiveMessages) {
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										auto messageNodes = doc.child("root").child("messages").children("message");
+										sf::Packet answerPacket;
+										for (pugi::xml_node& messageNode : messageNodes) {
+											if (messageNode.child("receiverName").text().as_string() == clients[i].name) {
+												answerPacket
+													<< messageNode.child("topic").text().as_string()
+													<< messageNode.child("senderName").text().as_string()
+													<< messageNode.child("content").text().as_string()
+													<< messageNode.child("dateTime").text().as_string();
+												auto attachmentNodes = messageNode.child("attachments").children("attachment");
+												int attachmentNodesCount = 0;
+												{
+													for (pugi::xml_node& attachmentNode : attachmentNodes) {
+														++attachmentNodesCount;
+													}
+												}
+												answerPacket << attachmentNodesCount;
+												for (pugi::xml_node& attachmentNode : attachmentNodes) {
+													answerPacket
+														<< attachmentNode.child("userPath").text().as_string()
+														<< readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string());
+												}
+											}
 										}
+										clients[i].socket->send(answerPacket);
 									}
-								}
+									else if (packetType == PacketType::SendMessage) {
+										std::string msNameInputText;
+										std::string msTopicInputText;
+										std::string msContentInputText;
+										packet >> msNameInputText >> msTopicInputText >> msContentInputText;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										int maxId = 0;
+#if 1 // NOTE: Find max id
+										{
+											auto messageNodes = rootNode.child("messages").children("message");
+											for (auto messageNode : messageNodes) {
+												int id = messageNode.child("id").text().as_int();
+												if (id > maxId) {
+													maxId = id;
+												}
+											}
+										}
 #endif
 
-								pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
-								pugi::xml_node idNode = messageNode.append_child("id");
-								pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
-								pugi::xml_node topicNode = messageNode.append_child("topic");
-								pugi::xml_node contentNode = messageNode.append_child("content");
-								pugi::xml_node senderNameNode = messageNode.append_child("senderName");
-								pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
+										pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
+										pugi::xml_node idNode = messageNode.append_child("id");
+										pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
+										pugi::xml_node topicNode = messageNode.append_child("topic");
+										pugi::xml_node contentNode = messageNode.append_child("content");
+										pugi::xml_node senderNameNode = messageNode.append_child("senderName");
+										pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
 
-								idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
-								receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
-								topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
-								contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
-								senderNameNode.append_child(pugi::node_pcdata).set_value(nameInputText.c_str());
-								dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
-								pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
-								{
-									std::string path, fileContent;
-									while (packet >> path >> fileContent) {
-										std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
-										std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
-										if (!fs::exists(storePathWithoutFilename)) {
-											fs::create_directories(storePathWithoutFilename);
-										}
-										std::string oldStorePathWithFilename = storePathWithFilename;
-										for (int i = 0; fs::exists(storePathWithFilename); ++i) {
-											storePathWithFilename = oldStorePathWithFilename;
-											storePathWithFilename += std::to_string(i);
-										}
-										std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
-										ofs << fileContent;
-										pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
-										attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
-										attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
-									}
-								}
-								doc.save_file((prefPath + "data.xml").c_str());
-							}
-							else if (packetType == PacketType::ReceiveMessages) {
-								std::string name;
-								packet >> name;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								auto messageNodes = doc.child("root").child("messages").children("message");
-								sf::Packet answerPacket;
-								for (pugi::xml_node& messageNode : messageNodes) {
-									if (messageNode.child("receiverName").text().as_string() == name) {
-										answerPacket
-											<< messageNode.child("topic").text().as_string()
-											<< messageNode.child("senderName").text().as_string()
-											<< messageNode.child("content").text().as_string()
-											<< messageNode.child("dateTime").text().as_string();
-										auto attachmentNodes = messageNode.child("attachments").children("attachment");
-										int attachmentNodesCount = 0;
+										idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
+										receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
+										topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
+										contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
+										senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
+										dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
+										pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
 										{
-											for (pugi::xml_node& attachmentNode : attachmentNodes) {
-												++attachmentNodesCount;
+											std::string path, fileContent;
+											while (packet >> path >> fileContent) {
+												std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
+												std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
+												if (!fs::exists(storePathWithoutFilename)) {
+													fs::create_directories(storePathWithoutFilename);
+												}
+												std::string oldStorePathWithFilename = storePathWithFilename;
+												for (int i = 0; fs::exists(storePathWithFilename); ++i) {
+													storePathWithFilename = oldStorePathWithFilename;
+													storePathWithFilename += std::to_string(i);
+												}
+												std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+												ofs << fileContent;
+												pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
+												attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
+												attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
 											}
 										}
-										answerPacket << attachmentNodesCount;
-										for (pugi::xml_node& attachmentNode : attachmentNodes) {
-											answerPacket
-												<< attachmentNode.child("userPath").text().as_string()
-												<< readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string());
-										}
+										doc.save_file((prefPath + "data.xml").c_str());
 									}
-								}
-								clients[i].socket->send(answerPacket);
-							}
-							else if (packetType == PacketType::MakeCall) {
-								std::string callerName, receiverName;
-								packet >> callerName >> receiverName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								pugi::xml_node callNode = rootNode.append_child("call");
-								pugi::xml_node callerNameNode = callNode.append_child("callerName");
-								pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
-								pugi::xml_node statusNode = callNode.append_child("status");
-								callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
-								receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
-								statusNode.append_child(pugi::node_pcdata).set_value("pending");
-								doc.save_file((prefPath + "data.xml").c_str());
-							}
-							else if (packetType == PacketType::CheckCalls) {
-								std::string receiverName;
-								packet >> receiverName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								bool found = false;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (receiverName == callNode.child("receiverName").text().as_string()) {
-										answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string();
-										found = true;
-										break;
-									}
-								}
-								if (!found) {
-									answerPacket << PacketType::NoPendingCall;
-								}
-								clients[i].socket->send(answerPacket);
-							}
-							else if (packetType == PacketType::AcceptCall) {
-								std::string receiverName;
-								packet >> receiverName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName) {
-										callNode.remove_child("status");
+									else if (packetType == PacketType::MakeCall) {
+										std::string callerName, receiverName;
+										packet >> callerName >> receiverName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										pugi::xml_node callNode = rootNode.append_child("call");
+										pugi::xml_node callerNameNode = callNode.append_child("callerName");
+										pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
 										pugi::xml_node statusNode = callNode.append_child("status");
-										statusNode.append_child(pugi::node_pcdata).set_value("accepted");
-										break;
+										callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
+										receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
+										statusNode.append_child(pugi::node_pcdata).set_value("pending");
+										doc.save_file((prefPath + "data.xml").c_str());
 									}
-								}
-								doc.save_file((prefPath + "data.xml").c_str());
-							}
-							else if (packetType == PacketType::IsCallAccepted) {
-								std::string callerName;
-								packet >> callerName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								bool found = false;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName) {
-										found = true;
-										std::string status = callNode.child("status").text().as_string();
-										if (status == "accepted") {
-											answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string();
+									else if (packetType == PacketType::CheckCalls) {
+										std::string receiverName;
+										packet >> receiverName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										bool found = false;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (receiverName == callNode.child("receiverName").text().as_string()) {
+												answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string();
+												found = true;
+												break;
+											}
 										}
-										else {
+										if (!found) {
+											answerPacket << PacketType::NoPendingCall;
+										}
+										clients[i].socket->send(answerPacket);
+									}
+									else if (packetType == PacketType::AcceptCall) {
+										std::string receiverName;
+										packet >> receiverName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("receiverName").text().as_string() == receiverName) {
+												callNode.remove_child("status");
+												pugi::xml_node statusNode = callNode.append_child("status");
+												statusNode.append_child(pugi::node_pcdata).set_value("accepted");
+												break;
+											}
+										}
+										doc.save_file((prefPath + "data.xml").c_str());
+									}
+									else if (packetType == PacketType::IsCallAccepted) {
+										std::string callerName;
+										packet >> callerName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										bool found = false;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("callerName").text().as_string() == callerName) {
+												found = true;
+												std::string status = callNode.child("status").text().as_string();
+												if (status == "accepted") {
+													answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string();
+												}
+												else {
+													answerPacket << PacketType::CallIsNotAccepted;
+												}
+												break;
+											}
+										}
+										if (!found) {
 											answerPacket << PacketType::CallIsNotAccepted;
 										}
-										break;
+										clients[i].socket->send(answerPacket);
 									}
-								}
-								if (!found) {
-									answerPacket << PacketType::CallIsNotAccepted;
-								}
-								clients[i].socket->send(answerPacket);
-							}
-							else if (packetType == PacketType::SendCallerAudioData) {
-								std::string callerName;
-								packet >> callerName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								// TODO: Handle situations where there are more than one call to the same person and things like that (remember to do the same in below if statements)
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName) {
-										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
-										int lastCallerAudioNodeId = 0;
-										auto callerAudioNodes = callNode.children("callerAudio");
-										for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
-											int id = callerAudioNode.child("id").text().as_int();
-											if (id > lastCallerAudioNodeId) {
-												lastCallerAudioNodeId = id;
+									else if (packetType == PacketType::SendCallerAudioData) {
+										std::string callerName;
+										packet >> callerName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										// TODO: Handle situations where there are more than one call to the same person and things like that (remember to do the same in below if statements)
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("callerName").text().as_string() == callerName) {
+												// TODO: Think about infinite number of id's or reuse old ones (data type size)?
+												int lastCallerAudioNodeId = 0;
+												auto callerAudioNodes = callNode.children("callerAudio");
+												for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
+													int id = callerAudioNode.child("id").text().as_int();
+													if (id > lastCallerAudioNodeId) {
+														lastCallerAudioNodeId = id;
+													}
+												}
+												int id = lastCallerAudioNodeId + 1;
+
+												pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
+
+												unsigned sampleRate;
+												unsigned channelCount;
+												sf::Uint64 sampleCount;
+												std::string samplesStr;
+												packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
+
+												callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
+												callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
+												callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
+												callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
+												callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
+												doc.save_file((prefPath + "data.xml").c_str());
+												break;
 											}
 										}
-										int id = lastCallerAudioNodeId + 1;
-
-										pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
-
-										unsigned sampleRate;
-										unsigned channelCount;
-										sf::Uint64 sampleCount;
-										std::string samplesStr;
-										packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
-
-										callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
-										callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
-										callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
-										callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
-										callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
-										// WARNING: Date time may depend on server Windows settings. It might be important when moving server to a different PC.
-										doc.save_file((prefPath + "data.xml").c_str());
-										break;
 									}
-								}
-							}
-							else if (packetType == PacketType::SendReceiverAudioData) {
-								std::string receiverName;
-								packet >> receiverName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName) {
-										// TODO: Think about infinite number of id's or reuse old ones (data type size)?
-										int lastReceiverAudioNodeId = 0;
-										auto callerAudioNodes = callNode.children("receiverAudio");
-										for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
-											int id = callerAudioNode.child("id").text().as_int();
-											if (id > lastReceiverAudioNodeId) {
-												lastReceiverAudioNodeId = id;
+									else if (packetType == PacketType::SendReceiverAudioData) {
+										std::string receiverName;
+										packet >> receiverName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("receiverName").text().as_string() == receiverName) {
+												// TODO: Think about infinite number of id's or reuse old ones (data type size)?
+												int lastReceiverAudioNodeId = 0;
+												auto callerAudioNodes = callNode.children("receiverAudio");
+												for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
+													int id = callerAudioNode.child("id").text().as_int();
+													if (id > lastReceiverAudioNodeId) {
+														lastReceiverAudioNodeId = id;
+													}
+												}
+												int id = lastReceiverAudioNodeId + 1;
+
+												pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
+
+												unsigned sampleRate;
+												unsigned channelCount;
+												sf::Uint64 sampleCount;
+												std::string samplesStr;
+												packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
+
+												receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
+												receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
+												receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
+												receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
+												receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
+												doc.save_file((prefPath + "data.xml").c_str());
+												break;
 											}
 										}
-										int id = lastReceiverAudioNodeId + 1;
-
-										pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
-
-										unsigned sampleRate;
-										unsigned channelCount;
-										sf::Uint64 sampleCount;
-										std::string samplesStr;
-										packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
-
-										receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
-										receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
-										receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
-										receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
-										receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
-										doc.save_file((prefPath + "data.xml").c_str());
-										break;
 									}
-								}
-							}
-							else if (packetType == PacketType::GetCallerAudioData) {
-								std::string callerName;
-								packet >> callerName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								// TODO: Is it possible that second user won't support channelCount? If yes what to do about it?
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								bool found = false;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName) {
-										std::vector<pugi::xml_node> callerAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("callerAudio"));
-										if (!callerAudioNodes.empty()) {
-											found = true;
-											pugi::xml_node callerAudioNodeWithMaxId = callerAudioNodes.front();
-											for (int i = 1; i < callerAudioNodes.size(); ++i) {
-												if (callerAudioNodes[i].child("id").text().as_int() > callerAudioNodeWithMaxId.child("id").text().as_int()) {
-													callerAudioNodeWithMaxId = callerAudioNodes[i];
+									else if (packetType == PacketType::GetCallerAudioData) {
+										std::string callerName;
+										packet >> callerName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										// TODO: Is it possible that second user won't support channelCount? If yes what to do about it?
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										bool found = false;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("callerName").text().as_string() == callerName) {
+												std::vector<pugi::xml_node> callerAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("callerAudio"));
+												if (!callerAudioNodes.empty()) {
+													found = true;
+													pugi::xml_node callerAudioNodeWithMaxId = callerAudioNodes.front();
+													for (int i = 1; i < callerAudioNodes.size(); ++i) {
+														if (callerAudioNodes[i].child("id").text().as_int() > callerAudioNodeWithMaxId.child("id").text().as_int()) {
+															callerAudioNodeWithMaxId = callerAudioNodes[i];
+														}
+													}
+
+													unsigned sampleRate = callerAudioNodeWithMaxId.child("sampleRate").text().as_uint();
+													unsigned channelCount = callerAudioNodeWithMaxId.child("channelCount").text().as_uint();
+													sf::Uint64 sampleCount = callerAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
+													std::string samplesStr = callerAudioNodeWithMaxId.child("samples").text().as_string();
+													answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+													clients[i].socket->send(answerPacket);
+													break;
 												}
 											}
-
-											unsigned sampleRate = callerAudioNodeWithMaxId.child("sampleRate").text().as_uint();
-											unsigned channelCount = callerAudioNodeWithMaxId.child("channelCount").text().as_uint();
-											sf::Uint64 sampleCount = callerAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
-											std::string samplesStr = callerAudioNodeWithMaxId.child("samples").text().as_string();
+										}
+										if (!found) {
+											unsigned sampleRate = 0;
+											unsigned channelCount = 0;
+											sf::Uint64 sampleCount = 0;
+											std::string samplesStr;
 											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
 											clients[i].socket->send(answerPacket);
-											break;
 										}
 									}
-								}
-								if (!found) {
-									unsigned sampleRate = 0;
-									unsigned channelCount = 0;
-									sf::Uint64 sampleCount = 0;
-									std::string samplesStr;
-									answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-									clients[i].socket->send(answerPacket);
-								}
-							}
-							else if (packetType == PacketType::GetReceiverAudioData) {
-								std::string receiverName;
-								packet >> receiverName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								sf::Packet answerPacket;
-								bool found = false;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("receiverName").text().as_string() == receiverName) {
-										std::vector<pugi::xml_node> receiverAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("receiverAudio"));
-										if (!receiverAudioNodes.empty()) {
-											found = true;
-											pugi::xml_node receiverAudioNodeWithMaxId = receiverAudioNodes.front();
-											for (int i = 1; i < receiverAudioNodes.size(); ++i) {
-												if (receiverAudioNodes[i].child("id").text().as_int() > receiverAudioNodeWithMaxId.child("id").text().as_int()) {
-													receiverAudioNodeWithMaxId = receiverAudioNodes[i];
+									else if (packetType == PacketType::GetReceiverAudioData) {
+										std::string receiverName;
+										packet >> receiverName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										sf::Packet answerPacket;
+										bool found = false;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("receiverName").text().as_string() == receiverName) {
+												std::vector<pugi::xml_node> receiverAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("receiverAudio"));
+												if (!receiverAudioNodes.empty()) {
+													found = true;
+													pugi::xml_node receiverAudioNodeWithMaxId = receiverAudioNodes.front();
+													for (int i = 1; i < receiverAudioNodes.size(); ++i) {
+														if (receiverAudioNodes[i].child("id").text().as_int() > receiverAudioNodeWithMaxId.child("id").text().as_int()) {
+															receiverAudioNodeWithMaxId = receiverAudioNodes[i];
+														}
+													}
+
+													unsigned sampleRate = receiverAudioNodeWithMaxId.child("sampleRate").text().as_uint();
+													unsigned channelCount = receiverAudioNodeWithMaxId.child("channelCount").text().as_uint();
+													sf::Uint64 sampleCount = receiverAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
+													std::string samplesStr = receiverAudioNodeWithMaxId.child("samples").text().as_string();
+													answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
+													clients[i].socket->send(answerPacket);
+													break;
 												}
 											}
-
-											unsigned sampleRate = receiverAudioNodeWithMaxId.child("sampleRate").text().as_uint();
-											unsigned channelCount = receiverAudioNodeWithMaxId.child("channelCount").text().as_uint();
-											sf::Uint64 sampleCount = receiverAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
-											std::string samplesStr = receiverAudioNodeWithMaxId.child("samples").text().as_string();
+										}
+										if (!found) {
+											unsigned sampleRate = 0;
+											unsigned channelCount = 0;
+											sf::Uint64 sampleCount = 0;
+											std::string samplesStr;
 											answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
 											clients[i].socket->send(answerPacket);
-											break;
 										}
 									}
-								}
-								if (!found) {
-									unsigned sampleRate = 0;
-									unsigned channelCount = 0;
-									sf::Uint64 sampleCount = 0;
-									std::string samplesStr;
-									answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-									clients[i].socket->send(answerPacket);
-								}
-							}
-							else if (packetType == PacketType::DisconnectCall) {
-								std::string callerName;
-								packet >> callerName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName) {
-										rootNode.remove_child(callNode);
-										break;
+									else if (packetType == PacketType::DisconnectCall) {
+										std::string callerName;
+										packet >> callerName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("callerName").text().as_string() == callerName) {
+												rootNode.remove_child(callNode);
+												break;
+											}
+										}
+										doc.save_file((prefPath + "data.xml").c_str());
+									}
+									else if (packetType == PacketType::DoesCallExits) {
+										sf::Packet answerPacket;
+										std::string callerName;
+										packet >> callerName;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										auto callNodes = rootNode.children("call");
+										bool found = false;
+										for (pugi::xml_node& callNode : callNodes) {
+											if (callNode.child("callerName").text().as_string() == callerName) {
+												found = true;
+												break;
+											}
+										}
+										answerPacket << found;
+										clients[i].socket->send(answerPacket);
 									}
 								}
-								doc.save_file((prefPath + "data.xml").c_str());
-							}
-							else if (packetType == PacketType::DoesCallExits) {
-								sf::Packet answerPacket;
-								std::string callerName;
-								packet >> callerName;
-								pugi::xml_document doc;
-								doc.load_file((prefPath + "data.xml").c_str());
-								pugi::xml_node rootNode = doc.child("root");
-								auto callNodes = rootNode.children("call");
-								bool found = false;
-								for (pugi::xml_node& callNode : callNodes) {
-									if (callNode.child("callerName").text().as_string() == callerName) {
-										found = true;
-										break;
-									}
+								else {
+									// TODO: Possibly cheat
 								}
-								answerPacket << found;
-								clients[i].socket->send(answerPacket);
 							}
 						}
 						else if (clients[i].socket->receive(packet) == sf::Socket::Disconnected) {
@@ -1028,8 +1136,237 @@ std::size_t getSize(std::string buffer)
 	return realTextlen;
 }
 
+std::string toStdString(CryptoPP::Integer i)
+{
+	std::stringstream ss;
+	ss << i;
+	return ss.str();
+}
+
 int main(int argc, char* argv[])
 {
+	//TODO: How AES and DH works
+#if 0
+	try {
+		// RFC 5114, 1024-bit MODP Group with 160-bit Prime Order Subgroup
+		// http://tools.ietf.org/html/rfc5114#section-2.1
+		CryptoPP::Integer p("0xB10B8F96A080E01DDE92DE5EAE5D54EC52C99FBCFB06A3C6"
+			"9A6A9DCA52D23B616073E28675A23D189838EF1E2EE652C0"
+			"13ECB4AEA906112324975C3CD49B83BFACCBDD7D90C4BD70"
+			"98488E9C219A73724EFFD6FAE5644738FAA31A4FF55BCCC0"
+			"A151AF5F0DC8B4BD45BF37DF365C1A65E68CFDA76D4DA708"
+			"DF1FB2BC2E4A4371");
+
+		CryptoPP::Integer g("0xA4D1CBD5C3FD34126765A442EFB99905F8104DD258AC507F"
+			"D6406CFF14266D31266FEA1E5C41564B777E690F5504F213"
+			"160217B4B01B886A5E91547F9E2749F4D7FBD7D3B9A92EE1"
+			"909D0D2263F80A76A6A24C087A091F531DBF0A0169B6A28A"
+			"D662A4D18E73AFA32D779D5918D08BC8858F4DCEF97C2A24"
+			"855E6EEB22B3B2E5");
+
+		CryptoPP::Integer q("0xF518AA8781A8DF278ABA4E7D64B7CB9D49462353");
+
+		// Schnorr Group primes are of the form p = rq + 1, p and q prime. They
+		// provide a subgroup order. In the case of 1024-bit MODP Group, the
+		// security level is 80 bits (based on the 160-bit prime order subgroup).		
+
+		// For a compare/contrast of using the maximum security level, see
+		// dh-unified.zip. Also see http://www.cryptopp.com/wiki/Diffie-Hellman
+		// and http://www.cryptopp.com/wiki/Security_level .
+
+		CryptoPP::DH dh;
+		CryptoPP::AutoSeededRandomPool rnd;
+
+		dh.AccessGroupParameters().Initialize(p, q, g);
+
+		if (!dh.GetGroupParameters().ValidateGroup(rnd, 3))
+			throw std::runtime_error("Failed to validate prime and generator");
+
+		size_t count = 0;
+
+		p = dh.GetGroupParameters().GetModulus();
+		q = dh.GetGroupParameters().GetSubgroupOrder();
+		g = dh.GetGroupParameters().GetGenerator();
+
+		// http://groups.google.com/group/sci.crypt/browse_thread/thread/7dc7eeb04a09f0ce
+		CryptoPP::Integer v = ModularExponentiation(g, q, p);
+		if (v != CryptoPP::Integer::One())
+			throw std::runtime_error("Failed to verify order of the subgroup");
+
+		//////////////////////////////////////////////////////////////
+
+		CryptoPP::DH2 dhA(dh), dhB(dh);
+
+		// NOTE: Empheral - classical key exchange
+
+		CryptoPP::SecByteBlock sprivA(dhA.StaticPrivateKeyLength()), spubA(dhA.StaticPublicKeyLength());
+		CryptoPP::SecByteBlock eprivA(dhA.EphemeralPrivateKeyLength()), epubA(dhA.EphemeralPublicKeyLength());
+
+		CryptoPP::SecByteBlock sprivB(dhB.StaticPrivateKeyLength()), spubB(dhB.StaticPublicKeyLength());
+		CryptoPP::SecByteBlock eprivB(dhB.EphemeralPrivateKeyLength()), epubB(dhB.EphemeralPublicKeyLength());
+
+		dhA.GenerateStaticKeyPair(rnd, sprivA, spubA);
+		dhA.GenerateEphemeralKeyPair(rnd, eprivA, epubA);
+
+		dhB.GenerateStaticKeyPair(rnd, sprivB, spubB);
+		dhB.GenerateEphemeralKeyPair(rnd, eprivB, epubB);
+
+		//////////////////////////////////////////////////////////////
+
+		if (dhA.AgreedValueLength() != dhB.AgreedValueLength())
+			throw std::runtime_error("Shared secret size mismatch");
+
+		CryptoPP::SecByteBlock sharedA(dhA.AgreedValueLength()), sharedB(dhB.AgreedValueLength());
+
+		if (!dhA.Agree(sharedA, sprivA, eprivA, spubB, epubB))
+			throw std::runtime_error("Failed to reach shared secret (A)");
+
+		if (!dhB.Agree(sharedB, sprivB, eprivB, spubA, epubA))
+			throw std::runtime_error("Failed to reach shared secret (B)");
+
+		count = std::min(dhA.AgreedValueLength(), dhB.AgreedValueLength());
+		if (!count || 0 != memcmp(sharedA.BytePtr(), sharedB.BytePtr(), count))
+			throw std::runtime_error("Failed to reach shared secret");
+
+		//////////////////////////////////////////////////////////////
+
+		CryptoPP::Integer a, b;
+
+		a.Decode(sharedA.BytePtr(), sharedA.SizeInBytes());
+		std::cout << "Shared secret (A): " << std::hex << a << std::endl;
+
+		b.Decode(sharedB.BytePtr(), sharedB.SizeInBytes());
+		std::cout << "Shared secret (B): " << std::hex << b << std::endl;
+	}
+	catch (const CryptoPP::Exception& e) {
+		std::cerr << e.what() << std::endl;
+		return -2;
+	}
+	catch (const std::exception& e) {
+		std::cerr << e.what() << std::endl;
+		return -1;
+	}
+	return 0;
+#endif
+#if 0
+	{
+		try {
+			// RFC 5114, 1024-bit MODP Group with 160-bit Prime Order Subgroup
+			// http://tools.ietf.org/html/rfc5114#section-2.1
+			CryptoPP::Integer p("0xB10B8F96A080E01DDE92DE5EAE5D54EC52C99FBCFB06A3C6"
+				"9A6A9DCA52D23B616073E28675A23D189838EF1E2EE652C0"
+				"13ECB4AEA906112324975C3CD49B83BFACCBDD7D90C4BD70"
+				"98488E9C219A73724EFFD6FAE5644738FAA31A4FF55BCCC0"
+				"A151AF5F0DC8B4BD45BF37DF365C1A65E68CFDA76D4DA708"
+				"DF1FB2BC2E4A4371");
+
+			CryptoPP::Integer g("0xA4D1CBD5C3FD34126765A442EFB99905F8104DD258AC507F"
+				"D6406CFF14266D31266FEA1E5C41564B777E690F5504F213"
+				"160217B4B01B886A5E91547F9E2749F4D7FBD7D3B9A92EE1"
+				"909D0D2263F80A76A6A24C087A091F531DBF0A0169B6A28A"
+				"D662A4D18E73AFA32D779D5918D08BC8858F4DCEF97C2A24"
+				"855E6EEB22B3B2E5");
+
+			CryptoPP::Integer q("0xF518AA8781A8DF278ABA4E7D64B7CB9D49462353");
+
+			// Schnorr Group primes are of the form p = rq + 1, p and q prime. They
+			// provide a subgroup order. In the case of 1024-bit MODP Group, the
+			// security level is 80 bits (based on the 160-bit prime order subgroup).		
+
+			// For a compare/contrast of using the maximum security level, see
+			// dh-unified.zip. Also see http://www.cryptopp.com/wiki/Diffie-Hellman
+			// and http://www.cryptopp.com/wiki/Security_level .
+
+			CryptoPP::DH dh;
+			CryptoPP::AutoSeededRandomPool rnd;
+
+			dh.AccessGroupParameters().Initialize(p, q, g);
+
+			if (!dh.GetGroupParameters().ValidateGroup(rnd, 3))
+				throw std::runtime_error("Failed to validate prime and generator");
+
+			size_t count = 0;
+
+			p = dh.GetGroupParameters().GetModulus();
+			q = dh.GetGroupParameters().GetSubgroupOrder();
+			g = dh.GetGroupParameters().GetGenerator();
+
+			// http://groups.google.com/group/sci.crypt/browse_thread/thread/7dc7eeb04a09f0ce
+			CryptoPP::Integer v = ModularExponentiation(g, q, p);
+			if (v != CryptoPP::Integer::One())
+				throw std::runtime_error("Failed to verify order of the subgroup");
+
+			//////////////////////////////////////////////////////////////
+	
+			CryptoPP::DH2 dhA(dh), dhB(dh);
+
+			// TODO: What is the usage of 8 below keys?
+
+			// In the unified model, each party holds two key pairs : one key pair is used to perform classical(unautheticated) Diffie - Hellman, and the second pair is used for signing to ensure authenticity.
+
+			// TODO: Put below keys on the client site
+			CryptoPP::SecByteBlock sprivA(dhA.StaticPrivateKeyLength()), spubA(dhA.StaticPublicKeyLength()); // NOTE: This is used to perform classical(unautheticated) Diffie - Hellman
+			CryptoPP::SecByteBlock eprivA(dhA.EphemeralPrivateKeyLength()), epubA(dhA.EphemeralPublicKeyLength()); // NOTE: This is used to sign to ensure authenticity
+
+			// TODO: Put below keys on the server site
+			CryptoPP::SecByteBlock sprivB(dhB.StaticPrivateKeyLength()), spubB(dhB.StaticPublicKeyLength());
+			CryptoPP::SecByteBlock eprivB(dhB.EphemeralPrivateKeyLength()), epubB(dhB.EphemeralPublicKeyLength());
+
+			/*
+			TODO: 
+			Client should containt 2 key pair (one key pair is used to perform classical(unautheticated) Diffie - Hellman), (the second pair is used for signing to ensure authenticity).
+			Server should containt 2 key pair
+			*/
+
+			dhA.GenerateStaticKeyPair(rnd, sprivA, spubA);
+			dhA.GenerateEphemeralKeyPair(rnd, eprivA, epubA);
+
+			dhB.GenerateStaticKeyPair(rnd, sprivB, spubB);
+			dhB.GenerateEphemeralKeyPair(rnd, eprivB, epubB);
+
+			//////////////////////////////////////////////////////////////
+
+			std::cout <<"Here:"<< dhA.AgreedValueLength() << " " << dhB.AgreedValueLength() << std::endl;
+
+			if (dhA.AgreedValueLength() != dhB.AgreedValueLength())  // NOTE: 256 == 256
+				throw std::runtime_error("Shared secret size mismatch");
+
+			CryptoPP::SecByteBlock sharedA(dhA.AgreedValueLength()), sharedB(dhB.AgreedValueLength());
+
+			if (!dhA.Agree(sharedA, sprivA, eprivA, spubB, epubB))
+				throw std::runtime_error("Failed to reach shared secret (A)");
+
+			if (!dhB.Agree(sharedB, sprivB, eprivB, spubA, epubA))
+				throw std::runtime_error("Failed to reach shared secret (B)");
+
+			count = std::min(dhA.AgreedValueLength(), dhB.AgreedValueLength());
+			if (!count || 0 != memcmp(sharedA.BytePtr(), sharedB.BytePtr(), count))
+				throw std::runtime_error("Failed to reach shared secret");
+
+			//////////////////////////////////////////////////////////////
+
+			CryptoPP::Integer a, b;
+
+			a.Decode(sharedA.BytePtr(), sharedA.SizeInBytes());
+			std::cout << "Shared secret (A): " << std::hex << a << std::endl;
+
+			b.Decode(sharedB.BytePtr(), sharedB.SizeInBytes());
+			std::cout << "Shared secret (B): " << std::hex << b << std::endl;
+		}
+
+		catch (const CryptoPP::Exception& e) {
+			std::cerr << e.what() << std::endl;
+			return -2;
+		}
+
+		catch (const std::exception& e) {
+			std::cerr << e.what() << std::endl;
+			return -1;
+		}
+
+		//return 0;
+	}
+#endif
 	prefPath = SDL_GetPrefPath("Huberti", "Sender");
 	std::srand(std::time(0));
 	SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
@@ -1046,6 +1383,170 @@ int main(int argc, char* argv[])
 #endif
 	sf::TcpSocket socket;
 	socket.connect("192.168.1.10", SERVER_PORT); // TODO: Put it on seperate thread + do something with timeout variable(when it can't connect to remote server) + change Ip address to public one?
+#if 0
+	{
+		// TODO: Make sure to provide four desirable features of secure communications(confidentiality, integrity, authentication, and non - repudiation).
+
+		// TODO: DH doesn't protect against against man-in-the-middle. DH2 includes authentication which hardens the exchange protocol against many man-in-the-middle attacks. But does it eliminate the problem? The documentation says that it makes the algorithm authenticated (because orginally it's not)
+
+		// TODO: Use DH2 ??? And if that's true, would it be secure?
+
+			// TODO: Is public/private key generation secure?
+
+		// TODO: Why only 32b key is said to be max allowed? Use keys with more b?
+
+			// NOTE: Conversely, most block cipher modes of operation require an IV which is randomand unpredictable, or at least unique for each message encrypted with a given key.
+
+				//Note: if your project is using encryption alone to secure your data, encryption alone is usually not enough.Please take a moment to read Authenticated Encryptionand consider using an algorithm or mode like CCM, GCM, EAX or ChaCha20Poly1305.
+
+
+			// TODO: Remember to make all data authenticated (if you choose to generate a random IV and append it to the message, be sure to authenticate the {IV,Ciphertext} pair.)
+
+
+		CryptoPP::AutoSeededRandomPool prng;
+		CryptoPP::Integer p, q, g;
+		CryptoPP::PrimeAndGenerator pg;
+
+		pg.Generate(1, prng, 512, 511);
+		p = pg.Prime();
+		q = pg.SubPrime();
+		g = pg.Generator();
+
+		CryptoPP::DH dh(p, q, g);
+		CryptoPP::SecByteBlock t1(dh.PrivateKeyLength()), t2(dh.PublicKeyLength());
+		dh.GenerateKeyPair(prng, t1, t2);
+		CryptoPP::Integer privateKey(t1, t1.size()), publicKey(t2, t2.size());
+
+		sf::Packet packet;
+		packet << PacketType::Dh << toStdString(publicKey);
+		socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+
+
+		sf::Packet answerPacket;
+		socket.receive(answerPacket); // TODO: Do something on fail + put it on separate thread?
+		byte key[CryptoPP::AES::DEFAULT_KEYLENGTH];
+		for (int i = 0; i < CryptoPP::AES::DEFAULT_KEYLENGTH; ++i) {
+			answerPacket >> key[i];
+		}
+
+		// TODO: Below code: It does not perform authentication over additional authenticated data (aad). - Is it necessary ???
+
+
+// The test vectors use both ADATA and PDATA. However,
+//  as a drop in replacement for older modes such as
+//  CBC, we only exercise (and need) plain text.
+
+
+		byte iv[CryptoPP::AES::BLOCKSIZE];
+		prng.GenerateBlock(iv, sizeof(iv));
+
+		const int TAG_SIZE = 12;
+
+		// Plain text
+		std::string pdata = "Authenticated Encryption";
+
+		// Encrypted, with Tag
+		std::string cipher, encoded;
+
+		// Recovered plain text
+		std::string rpdata;
+
+		/*********************************\
+		\*********************************/
+
+		// Pretty print
+		encoded.clear();
+		CryptoPP::StringSource(key, sizeof(key), true,
+			new CryptoPP::HexEncoder(
+				new CryptoPP::StringSink(encoded)
+			) // HexEncoder
+		); // StringSource
+		std::cout << "key: " << encoded << std::endl;
+
+		// Pretty print
+		encoded.clear();
+		CryptoPP::StringSource(iv, sizeof(iv), true,
+			new CryptoPP::HexEncoder(
+				new CryptoPP::StringSink(encoded)
+			) // HexEncoder
+		); // StringSource
+		std::cout << " iv: " << encoded << std::endl;
+
+		std::cout << std::endl;
+
+		/*********************************\
+		\*********************************/
+
+
+
+		try {
+			std::cout << "plain text: " << pdata << std::endl;
+
+			CryptoPP::GCM< CryptoPP::AES >::Encryption e;
+			e.SetKeyWithIV(key, sizeof(key), iv, sizeof(iv));
+			// e.SpecifyDataLengths( 0, pdata.size(), 0 );
+
+			CryptoPP::StringSource(pdata, true,
+				new CryptoPP::AuthenticatedEncryptionFilter(e,
+					new CryptoPP::StringSink(cipher), false, TAG_SIZE
+				) // AuthenticatedEncryptionFilter
+			); // StringSource
+
+
+
+
+		}
+		catch (CryptoPP::InvalidArgument& e) {
+			std::cerr << "Caught InvalidArgument..." << std::endl;
+			std::cerr << e.what() << std::endl;
+			std::cerr << std::endl;
+		}
+		catch (CryptoPP::Exception& e) {
+			std::cerr << "Caught Exception..." << std::endl;
+			std::cerr << e.what() << std::endl;
+			std::cerr << std::endl;
+		}
+
+		/*********************************\
+		\*********************************/
+
+		// Pretty print
+		encoded.clear();
+		CryptoPP::StringSource(cipher, true,
+			new CryptoPP::HexEncoder(
+				new CryptoPP::StringSink(encoded)
+			) // HexEncoder
+		); // StringSource
+		std::cout << "cipher text: " << encoded << std::endl;
+
+		// Attack the first and last byte
+		//if( cipher.size() > 1 )
+		//{
+		// cipher[ 0 ] |= 0x0F;
+		// cipher[ cipher.size()-1 ] |= 0x0F;
+		//}
+
+		/*********************************\
+		\*********************************/
+
+		/*********************************\
+		\*********************************/
+
+
+
+		{
+			sf::Packet packet;
+			packet << PacketType::TestMessage << cipher;
+			for (int i = 0; i < CryptoPP::AES::BLOCKSIZE; ++i) {
+				packet << iv[i];
+			}
+			socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+			std::this_thread::sleep_for(3s);
+		}
+
+
+	}
+#endif
 	std::string programName = fs::path(argv[0]).stem().string();
 #if 1 && !RELEASE // TODO: Remember to turn it off on reelase
 	SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
@@ -1360,6 +1861,8 @@ int main(int argc, char* argv[])
 					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
 						/*
 						TODO:
+							(DONE)
+
 							Someone might modify program behaviour and get into later states. Protect againts that.
 							Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
 
@@ -1368,8 +1871,11 @@ int main(int argc, char* argv[])
 						*/
 
 						// TODO: Encrypt the data on the client and decrypt it on the server
+						// TODO: Add Crypto++ library to preamke + learn how to use AES
 						// TODO: Make sure that it will be safe (no one would be able to steal login and password)
 						// TODO: Prevent brute force - connection: (slowdown? timeout? capatche?)
+						// TODO: Checkout possible security leaks in DH and possibly fix them (e.g man-in-the-middle)
+						// TODO: Remember that other file types like images should be unreadable after the encryption
 						sf::Packet p;
 						p << PacketType::Login << nameInputText.text << passwordInputText.text;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
@@ -1470,13 +1976,13 @@ int main(int argc, char* argv[])
 								ml.surnameInputText.text.pop_back();
 								ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text, { TEXT_COLOR });
 							}
-			}
-		}
+						}
+					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
 						ml.isNameSelected = !ml.isNameSelected;
-					}
+				}
 #endif
-	}
+			}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
 				}
@@ -1562,9 +2068,9 @@ int main(int argc, char* argv[])
 						isCaller = false;
 						receiverName = nameInputText.text;
 						receiverSurname = surnameInputText.text;
-							}
+					}
 #endif
-						}
+				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
 					buttons[event.button.button] = false;
 				}
@@ -1611,7 +2117,7 @@ int main(int argc, char* argv[])
 							}
 						}
 					}
-								}
+				}
 				if (event.type == SDL_TEXTINPUT) {
 #ifdef CALL
 					if (ml.isNameSelected) {
@@ -1619,9 +2125,9 @@ int main(int argc, char* argv[])
 					}
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
-					}
+		}
 #endif
-				}
+	}
 			}
 #ifdef CALL
 			if (isCaller) {
@@ -1646,7 +2152,7 @@ int main(int argc, char* argv[])
 							}
 #endif
 			sf::Packet sentPacket;
-			sentPacket << PacketType::ReceiveMessages << nameInputText.text;
+			sentPacket << PacketType::ReceiveMessages;
 			socket.send(sentPacket);
 			sf::Packet receivedPacket;
 			socket.receive(receivedPacket); // TODO: Do something on fail + put it on separate thread?
@@ -1775,7 +2281,7 @@ int main(int argc, char* argv[])
 			}
 			else {
 				SDL_RenderDrawRectF(renderer, &ml.surnameR);
-				}
+			}
 			ml.nameText.draw(renderer);
 			ml.surnameText.draw(renderer);
 			drawInBorders(ml.nameInputText, ml.nameR, renderer, robotoF);
@@ -2358,7 +2864,7 @@ int main(int argc, char* argv[])
 					std::thread t1([&] {
 #if 0 // TODO: Use it ???
 						if (!sf::SoundBufferRecorder::isAvailable()) {
-						}
+				}
 #endif
 						sf::SoundBufferRecorder recorder;
 						recorder.start();
@@ -2379,9 +2885,9 @@ int main(int argc, char* argv[])
 						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						shouldRunRecordingThread = true;
-						});
+			});
 					t1.detach();
-				}
+		}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {

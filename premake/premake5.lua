@@ -63,6 +63,7 @@ project "Sender"
 		"../vendor/GTK/include/pixman-1",
 		"../vendor/GTK/lib/glib-2.0/include",
 		"../vendor/NATIVEFILEDIALOGEXTENDED/src/include",
+		"../vendor/CRYPTOPP840",
     }
    
     libdirs{
@@ -77,6 +78,7 @@ project "Sender"
         "../vendor/CURL/lib",
         "../vendor/GTK/lib",
         "../vendor/NATIVEFILEDIALOGEXTENDED/lib/x86",
+        "../vendor/CRYPTOPP840/Win32/Output/Debug",
     }
 
     links{
@@ -149,6 +151,7 @@ project "Sender"
 		"turbojpeg.lib",
 		"zlib1.lib",
 		"nfd.lib",
+		"cryptlib.lib",
     }
 
 	files{
