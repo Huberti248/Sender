@@ -670,7 +670,7 @@ void runServer()
 
 							}
 #endif
-							else if (packetType == PacketType::Login) {
+							if (packetType == PacketType::Login) {
 								std::string name, password;
 								packet >> name >> password;
 								pugi::xml_document doc;
@@ -1297,7 +1297,7 @@ int main(int argc, char* argv[])
 				throw std::runtime_error("Failed to verify order of the subgroup");
 
 			//////////////////////////////////////////////////////////////
-	
+
 			CryptoPP::DH2 dhA(dh), dhB(dh);
 
 			// TODO: What is the usage of 8 below keys?
@@ -1313,7 +1313,7 @@ int main(int argc, char* argv[])
 			CryptoPP::SecByteBlock eprivB(dhB.EphemeralPrivateKeyLength()), epubB(dhB.EphemeralPublicKeyLength());
 
 			/*
-			TODO: 
+			TODO:
 			Client should containt 2 key pair (one key pair is used to perform classical(unautheticated) Diffie - Hellman), (the second pair is used for signing to ensure authenticity).
 			Server should containt 2 key pair
 			*/
@@ -1326,7 +1326,7 @@ int main(int argc, char* argv[])
 
 			//////////////////////////////////////////////////////////////
 
-			std::cout <<"Here:"<< dhA.AgreedValueLength() << " " << dhB.AgreedValueLength() << std::endl;
+			std::cout << "Here:" << dhA.AgreedValueLength() << " " << dhB.AgreedValueLength() << std::endl;
 
 			if (dhA.AgreedValueLength() != dhB.AgreedValueLength())  // NOTE: 256 == 256
 				throw std::runtime_error("Shared secret size mismatch");
@@ -1704,7 +1704,7 @@ int main(int argc, char* argv[])
 	SDL_FRect attachmentsScrollR;
 	attachmentsScrollR.w = 20;
 	attachmentsScrollR.h = attachmentR.h;
-	attachmentsScrollR.x = attachmentR.x + attachmentR.w;
+	attachmentsScrollR.x = windowWidth - attachmentsScrollR.w;
 	attachmentsScrollR.y = attachmentR.y;
 	SDL_FRect attachmentsScrollBtnR;
 	attachmentsScrollBtnR.w = attachmentsScrollR.w;
@@ -1799,7 +1799,7 @@ int main(int argc, char* argv[])
 	SDL_FRect msAttachmentsScrollR;
 	msAttachmentsScrollR.w = 20;
 	msAttachmentsScrollR.h = msAttachmentR.h;
-	msAttachmentsScrollR.x = msAttachmentR.x + msAttachmentR.w;
+	msAttachmentsScrollR.x = windowWidth - attachmentsScrollR.w;
 	msAttachmentsScrollR.y = msAttachmentR.y;
 	SDL_FRect msAttachmentsScrollBtnR;
 	msAttachmentsScrollBtnR.w = msAttachmentsScrollR.w;
@@ -1980,9 +1980,9 @@ int main(int argc, char* argv[])
 					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
 						ml.isNameSelected = !ml.isNameSelected;
-				}
+					}
 #endif
-			}
+				}
 				if (event.type == SDL_KEYUP) {
 					keys[event.key.keysym.scancode] = false;
 				}
@@ -2125,9 +2125,9 @@ int main(int argc, char* argv[])
 					}
 					else {
 						ml.surnameInputText.setText(renderer, robotoF, ml.surnameInputText.text + event.text.text, { TEXT_COLOR });
-		}
+					}
 #endif
-	}
+				}
 			}
 #ifdef CALL
 			if (isCaller) {
@@ -2149,7 +2149,7 @@ int main(int argc, char* argv[])
 					ml.isNameSelected = true;
 					state = State::Call;
 				}
-							}
+			}
 #endif
 			sf::Packet sentPacket;
 			sentPacket << PacketType::ReceiveMessages;
@@ -2292,7 +2292,7 @@ int main(int argc, char* argv[])
 			}
 #endif
 			SDL_RenderPresent(renderer);
-			}
+		}
 		else if (state == State::MessageContent) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
@@ -2313,6 +2313,14 @@ int main(int argc, char* argv[])
 					buttons[event.button.button] = true;
 					if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
 						state = State::MessageList;
+						for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+							if (i==0) {
+								ml.messages[messageIndexToShow].attachments[i].text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+							}
+							else {
+								ml.messages[messageIndexToShow].attachments[i].text.dstR.y = ml.messages[messageIndexToShow].attachments[i-1].text.dstR.y + ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
+							}
+						}
 					}
 					for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
 						if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR) && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentsScrollR.y) {
@@ -2503,6 +2511,10 @@ int main(int argc, char* argv[])
 			for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
 				if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h &&
 					ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
+					SDL_FRect r = ml.messages[messageIndexToShow].attachments[i].text.dstR;
+					r.w += 50;
+					SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
+					SDL_RenderFillRectF(renderer, &r);
 					ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
 				}
 			}
@@ -2779,6 +2791,10 @@ int main(int argc, char* argv[])
 			for (int i = 0; i < msAttachments.size(); ++i) {
 				if (msAttachments[i].text.dstR.y + msAttachments[i].text.dstR.h <= msAttachmentR.y + msAttachmentR.h &&
 					msAttachments[i].text.dstR.y >= msAttachmentR.y) {
+					SDL_FRect r = msAttachments[i].text.dstR;
+					r.w += 50;
+					SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
+					SDL_RenderFillRectF(renderer, &r);
 					msAttachments[i].text.draw(renderer);
 				}
 			}
@@ -2864,7 +2880,7 @@ int main(int argc, char* argv[])
 					std::thread t1([&] {
 #if 0 // TODO: Use it ???
 						if (!sf::SoundBufferRecorder::isAvailable()) {
-				}
+						}
 #endif
 						sf::SoundBufferRecorder recorder;
 						recorder.start();
@@ -2885,9 +2901,9 @@ int main(int argc, char* argv[])
 						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						shouldRunRecordingThread = true;
-			});
+						});
 					t1.detach();
-		}
+				}
 				if (shouldRunPlayingThread) {
 					shouldRunPlayingThread = false;
 					std::thread t2([&] {
@@ -2942,8 +2958,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
+			}
 		}
-						}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-					}
+	}
