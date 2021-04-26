@@ -1,8 +1,8 @@
 ﻿/*
 TODO:
+- Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - When adding attachments with big size the program doesn't respond. Display some info about it?
 - Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
-- Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - Replace buttons to black one witch shadows + gold like font color (like on SDL2 website)
 - Improve scroll apperance in message send state (white bg color up and black bg color below, matching scroll)
 - When std::wstring is send to the server, std::wstring should be received from client on the server
@@ -442,6 +442,8 @@ struct Attachment {
 	std::string path;
 	std::string fileContent;
 	Text text;
+	SDL_FRect bgR{};
+	SDL_Rect deleteBtnR{};
 };
 
 struct Message {
@@ -1653,6 +1655,7 @@ int main(int argc, char* argv[])
 #endif
 #if 1 // NOTE: MessageContent
 	SDL_Texture* closeT = IMG_LoadTexture(renderer, "res/close.png");
+	SDL_Texture* deleteT = IMG_LoadTexture(renderer, "res/delete.png");
 	SDL_FRect closeBtnR;
 	closeBtnR.w = 64;
 	closeBtnR.h = 64;
@@ -2314,11 +2317,11 @@ int main(int argc, char* argv[])
 					if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
 						state = State::MessageList;
 						for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-							if (i==0) {
+							if (i == 0) {
 								ml.messages[messageIndexToShow].attachments[i].text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
 							}
 							else {
-								ml.messages[messageIndexToShow].attachments[i].text.dstR.y = ml.messages[messageIndexToShow].attachments[i-1].text.dstR.y + ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
+								ml.messages[messageIndexToShow].attachments[i].text.dstR.y = ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.y + ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
 							}
 						}
 					}
@@ -2511,10 +2514,8 @@ int main(int argc, char* argv[])
 			for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
 				if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h &&
 					ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
-					SDL_FRect r = ml.messages[messageIndexToShow].attachments[i].text.dstR;
-					r.w += 50;
 					SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
-					SDL_RenderFillRectF(renderer, &r);
+					SDL_RenderFillRectF(renderer, &ml.messages[messageIndexToShow].attachments[i].bgR);
 					ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
 				}
 			}
@@ -2632,6 +2633,12 @@ int main(int argc, char* argv[])
 										else {
 											msAttachments.back().text.dstR.y = msAttachments[msAttachments.size() - 2].text.dstR.y + msAttachments[msAttachments.size() - 2].text.dstR.h;
 										}
+										msAttachments.back().bgR = msAttachments.back().text.dstR;
+										msAttachments.back().bgR.w += 50;
+										msAttachments.back().deleteBtnR.w = msAttachments.back().bgR.h;
+										msAttachments.back().deleteBtnR.h = msAttachments.back().bgR.h;
+										msAttachments.back().deleteBtnR.x = msAttachments.back().bgR.x + msAttachments.back().bgR.w;
+										msAttachments.back().deleteBtnR.y = msAttachments.back().bgR.y;
 										NFD_PathSet_FreePathN(outPath);
 									}
 								}
@@ -2647,6 +2654,21 @@ int main(int argc, char* argv[])
 					}
 					else if (SDL_PointInFRect(&mousePos, &msContentR)) {
 						msSelectedWidget = MsSelectedWidget::Content;
+					}
+					{
+						int i = 0;
+						for (; i < msAttachments.size(); ++i) {
+							if (SDL_PointInRect(&mousePos, &msAttachments[i].deleteBtnR)) {
+								msAttachments.erase(msAttachments.begin() + i--);
+								break;
+							}
+						}
+						++i;
+						for (; i < msAttachments.size(); ++i) {
+							msAttachments[i].text.dstR.y -= msAttachments[i].text.dstR.h;
+							msAttachments[i].deleteBtnR.y -= msAttachments[i].deleteBtnR.h;
+							msAttachments[i].bgR.y -= msAttachments[i].bgR.h;
+						}
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -2671,6 +2693,8 @@ int main(int argc, char* argv[])
 							if (minY < msAttachmentR.y) {
 								for (Attachment& attachment : msAttachments) {
 									attachment.text.dstR.y += attachment.text.dstR.h;
+									attachment.bgR.y += attachment.bgR.h;
+									attachment.deleteBtnR.y += attachment.deleteBtnR.h;
 								}
 								float maxVisible = msAttachmentR.h / msAttachments.front().text.dstR.h; // NOTE: Assume that items have same height
 								float percent = 100 / (msAttachments.size() - maxVisible);
@@ -2690,6 +2714,8 @@ int main(int argc, char* argv[])
 							if (maxY >= msAttachmentR.y + msAttachmentR.h) {
 								for (Attachment& attachment : msAttachments) {
 									attachment.text.dstR.y -= attachment.text.dstR.h;
+									attachment.bgR.y -= attachment.bgR.h;
+									attachment.deleteBtnR.y -= attachment.deleteBtnR.h;
 								}
 								float maxVisible = msAttachmentR.h / msAttachments.front().text.dstR.h; // NOTE: Assume that items have same height
 								float percent = 100 / (msAttachments.size() - maxVisible);
@@ -2791,11 +2817,12 @@ int main(int argc, char* argv[])
 			for (int i = 0; i < msAttachments.size(); ++i) {
 				if (msAttachments[i].text.dstR.y + msAttachments[i].text.dstR.h <= msAttachmentR.y + msAttachmentR.h &&
 					msAttachments[i].text.dstR.y >= msAttachmentR.y) {
-					SDL_FRect r = msAttachments[i].text.dstR;
-					r.w += 50;
 					SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
-					SDL_RenderFillRectF(renderer, &r);
+					SDL_RenderFillRectF(renderer, &msAttachments[i].bgR);
 					msAttachments[i].text.draw(renderer);
+					SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
+					SDL_RenderFillRect(renderer, &msAttachments[i].deleteBtnR);
+					SDL_RenderCopy(renderer, deleteT, 0, &msAttachments[i].deleteBtnR);
 				}
 			}
 			SDL_SetRenderDrawColor(renderer, 23, 23, 23, 255);
@@ -2958,8 +2985,8 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRect(renderer, &r);
 			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
-			}
 		}
+	}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-	}
+}
