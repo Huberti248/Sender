@@ -64,6 +64,7 @@ project "Sender"
 		"../vendor/GTK/lib/glib-2.0/include",
 		"../vendor/NATIVEFILEDIALOGEXTENDED/src/include",
 		"../vendor/CRYPTOPP840",
+        "../vendor/BOOST",
     }
    
     libdirs{
@@ -79,6 +80,7 @@ project "Sender"
         "../vendor/GTK/lib",
         "../vendor/NATIVEFILEDIALOGEXTENDED/lib/x86",
         "../vendor/CRYPTOPP840/Win32/Output/Debug",
+        "../vendor/BOOST/stage/lib",
     }
 
     links{

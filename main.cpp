@@ -3,7 +3,6 @@ TODO:
 - Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - When adding attachments with big size the program doesn't respond. Display some info about it?
 - Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
-- Replace buttons to black one witch shadows + gold like font color (like on SDL2 website)
 - Improve scroll apperance in message send state (white bg color up and black bg color below, matching scroll)
 - When std::wstring is send to the server, std::wstring should be received from client on the server
 - Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
@@ -1852,8 +1851,8 @@ int main(int argc, char* argv[])
 							if (!nameInputText.text.empty()) {
 								popBack(nameInputText.text);
 								nameInputText.setText(renderer, robotoF, nameInputText.text, { TEXT_COLOR });
+								}
 							}
-						}
 						else {
 							if (!passwordInputText.text.empty()) {
 								popBack(passwordInputText.text);
@@ -2515,6 +2514,8 @@ int main(int argc, char* argv[])
 				if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h &&
 					ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
 					SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
+					ml.messages[messageIndexToShow].attachments[i].bgR = ml.messages[messageIndexToShow].attachments[i].text.dstR;
+					ml.messages[messageIndexToShow].attachments[i].bgR.w += 50;
 					SDL_RenderFillRectF(renderer, &ml.messages[messageIndexToShow].attachments[i].bgR);
 					ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
 				}
