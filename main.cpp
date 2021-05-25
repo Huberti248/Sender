@@ -3,7 +3,6 @@ TODO:
 - Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - When adding attachments with big size the program doesn't respond. Display some info about it?
 - Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
-- Improve scroll apperance in message send state (white bg color up and black bg color below, matching scroll)
 - When std::wstring is send to the server, std::wstring should be received from client on the server
 - Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
 - Chekout getSize() and popBack() functions for exotic characters as well as remember to use them for every place where polish character might be placed
@@ -12,7 +11,6 @@ TODO:
 - Checkout have many clients could be connected to the server at the same time + handle situation when server is full
 - Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
-- ChetEngineLoginWithoutPassword Set 1. nameInputText.text to "b" (this could be done in GUI) 2. state=State::MessageList 3. does it allow to login without password and receive messages???
 */
 #include <iostream>
 #include <fstream>
@@ -37,6 +35,7 @@ TODO:
 #include <SFML/Network.hpp>
 #include <SFML/Audio.hpp>
 //#include <SFML/Graphics.hpp>
+#include <boost/locale.hpp>
 #include <nfd.h>
 #include <aes.h>
 #include <gcm.h>
@@ -467,6 +466,50 @@ enum MsSelectedWidget {
 	Count, // WARNING: Keep it last
 };
 
+std::string ucs4ToUtf8(const std::u32string& in)
+{
+	return boost::locale::conv::utf_to_utf<char>(in);
+}
+
+std::u32string utf8ToUcs4(const std::string& in)
+{
+	return boost::locale::conv::utf_to_utf<char32_t>(in);
+}
+
+std::string utf8Substr(const std::string& str, unsigned int start, unsigned int leng)
+{
+	std::u32string s = utf8ToUcs4(str);
+	return ucs4ToUtf8(s.substr(start, leng));
+}
+
+void utf8Erase(std::string& buffer, int index)
+{
+	buffer = utf8Substr(buffer, 0, index) + utf8Substr(buffer, index + 1, std::string::npos);
+}
+
+void utf8PopBack(std::string& buffer)
+{
+	std::u32string str = utf8ToUcs4(buffer);
+	str.pop_back();
+	buffer = ucs4ToUtf8(str);
+}
+
+std::size_t utf8GetSize(std::string buffer)
+{
+	std::u32string str = utf8ToUcs4(buffer);
+	return str.size();
+}
+
+void utf8Insert(std::string& buffer, int index, std::string text)
+{
+	std::u32string u32Buffer = utf8ToUcs4(buffer);
+	if (index > u32Buffer.size()) {
+		index = u32Buffer.size();
+	}
+	u32Buffer.insert(index, utf8ToUcs4(text));
+	buffer = ucs4ToUtf8(u32Buffer);
+}
+
 void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* font)
 {
 	std::string currentText = text.text;
@@ -475,13 +518,120 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
 			break;
 		}
 		else {
-			text.text.erase(0, 1); // TODO: If the first character is a wide character (e.g. polish character) it might show some other character (like question mark in a triangle) if it will be narrower than the previous one and after erase text will match loop statament
+			utf8Erase(text.text, 0);
 			text.setText(renderer, font, text.text, { TEXT_COLOR });
 		}
 	}
 	text.draw(renderer);
 	text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
+
+struct Input {
+	SDL_Rect r{};
+	Text text;
+	SDL_Rect cursorR{};
+	int currentLetter = 0;
+	std::u32string left;
+	std::u32string right;
+	bool isPassword = false;
+	bool isSelected = false;
+
+	void handleEvent(SDL_Event event, TTF_Font* font)
+	{
+		if (event.type == SDL_KEYDOWN) {
+			if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+				if (currentLetter) {
+					utf8Erase(text.text, currentLetter - 1);
+					if (!right.empty()) {
+						std::u32string s = utf8ToUcs4(text.text);
+						s.push_back(right.front());
+						right.erase(0, 1);
+						text.text = ucs4ToUtf8(s);
+					}
+					else if (!left.empty()) {
+						std::u32string s = utf8ToUcs4(text.text);
+						s.insert(0, 1, left.back());
+						left.pop_back();
+						text.text = ucs4ToUtf8(s);
+					}
+					else {
+						--currentLetter;
+					}
+					text.setText(renderer, font, text.text, {});
+				}
+			}
+			else if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) {
+				if (currentLetter) {
+					--currentLetter;
+				}
+				else {
+					if (!left.empty()) {
+						std::u32string s = utf8ToUcs4(text.text);
+						s.insert(s.begin(), left.back());
+						left.pop_back();
+						right.insert(right.begin(), s.back());
+						s.pop_back();
+						text.setText(renderer, font, ucs4ToUtf8(s), {});
+					}
+				}
+			}
+			else if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT) {
+				if (currentLetter != utf8ToUcs4(text.text).size()) {
+					++currentLetter;
+				}
+				else {
+					if (!right.empty()) {
+						std::u32string s = utf8ToUcs4(text.text);
+						s.push_back(right.front());
+						right.erase(0, 1);
+						left.push_back(s.front());
+						s.erase(0, 1);
+						text.setText(renderer, font, ucs4ToUtf8(s), {});
+					}
+				}
+			}
+		}
+		else if (event.type == SDL_TEXTINPUT) {
+			utf8Insert(text.text, currentLetter, event.text.text);
+			text.setText(renderer, font, text.text, {});
+			++currentLetter;
+			while (text.dstR.x + text.dstR.w > r.x + r.w) {
+				--currentLetter;
+				left.push_back(utf8ToUcs4(text.text)[0]);
+				utf8Erase(text.text, 0);
+				text.setText(renderer, font, text.text, {});
+			}
+		}
+	}
+
+	void draw(SDL_Renderer* renderer, TTF_Font* font)
+	{
+		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
+		SDL_RenderFillRect(renderer, &r);
+		if (isPassword) {
+			std::string currPassword = text.text;
+			text.setText(renderer, font, std::string(utf8GetSize(currPassword), '*'), { TEXT_COLOR });
+			text.draw(renderer);
+			text.setText(renderer, font, currPassword, { TEXT_COLOR });
+		}
+		else {
+			text.draw(renderer);
+		}
+		SDL_SetRenderDrawColor(renderer, 0, 255, 0, 0);
+		Text t = text;
+		t.text = utf8Substr(t.text, 0, currentLetter);
+		t.setText(renderer, font, t.text, {});
+		if (currentLetter) {
+			cursorR.x = t.dstR.x + t.dstR.w;
+		}
+		else {
+			cursorR.x = t.dstR.x;
+		}
+		if (isSelected) {
+			SDL_RenderFillRect(renderer, &cursorR);
+		}
+	}
+};
 
 std::string readWholeFileInBinary(std::string path)
 {
@@ -492,7 +642,7 @@ std::string readWholeFileInBinary(std::string path)
 }
 
 void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
-	MsSelectedWidget& msSelectedWidget, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
+	Input& msTopicInput, Input& msNameInput, bool& msIsContentSelected, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
 	sf::Packet packet;
 	packet
@@ -509,7 +659,9 @@ void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInpu
 	msNameInputText.setText(renderer, font, "");
 	msTopicInputText.setText(renderer, font, "");
 	msContentInputText.setText(renderer, font, "");
-	msSelectedWidget = MsSelectedWidget::Name;
+	msNameInput.isSelected = false;
+	msTopicInput.isSelected = true;
+	msIsContentSelected = false;
 	attachments.clear();
 }
 
@@ -1085,57 +1237,17 @@ enum CallState {
 struct MessageList {
 	std::vector<Message> messages;
 	SDL_Texture* writeMessageT = 0;
-	SDL_Texture* callT = 0;
 	SDL_FRect writeMessageBtnR{};
 	SDL_FRect callBtnR{};
 	Text nameText;
 	SDL_FRect nameR{};
 	Text nameInputText;
 	bool isNameSelected = true;
-	SDL_Texture* pickUpT = 0;
 	SDL_FRect pickUpBtnR{};
 	Text callerNameText;
 	CallState callState = CallState::None;
+	Text userInfoText;
 };
-
-void popBack(std::string& buffer)
-{
-	std::size_t textlen = SDL_strlen(buffer.c_str());
-	do {
-		if (textlen == 0) {
-			break;
-		}
-		if ((buffer[textlen - 1] & 0x80) == 0x00) {
-			/* One byte */
-			buffer.erase(textlen - 1);
-			break;
-		}
-		if ((buffer[textlen - 1] & 0xC0) == 0x80) {
-			/* Byte from the multibyte sequence */
-			buffer.erase(textlen - 1);
-			textlen--;
-			if (textlen == 0) { break; } // invalid character
-		}
-		if ((buffer[textlen - 1] & 0xC0) == 0xC0) {
-			/* First byte of multibyte sequence */
-			buffer.erase(textlen - 1);
-			break;
-		}
-	} while (true);
-}
-
-std::size_t getSize(std::string buffer)
-{
-	std::size_t textlen = SDL_strlen(buffer.c_str());
-	std::size_t realTextlen = textlen;
-	for (std::size_t i = 0; i < textlen; ++i) {
-		if ((buffer[i] & 0xC0) == 0x80) // NOTE: Byte from the multibyte sequence
-		{
-			--realTextlen;
-		}
-	}
-	return realTextlen;
-}
 
 std::string toStdString(CryptoPP::Integer i)
 {
@@ -1571,41 +1683,50 @@ int main(int argc, char* argv[])
 	bool running = true;
 	State state = State::LoginAndRegister;
 #if 1 // NOTE: LoginAndRegister
-	SDL_FRect nameR;
-	nameR.w = 200;
-	nameR.h = 30;
-	nameR.x = windowWidth / 2 - nameR.w / 2;
-	nameR.y = windowHeight / 2.f - nameR.h - 10;
+	Input nameInput;
+	nameInput.r.w = 200;
+	nameInput.r.h = 30;
+	nameInput.r.x = windowWidth / 2 - nameInput.r.w / 2;
+	nameInput.r.y = windowHeight / 2.f - nameInput.r.h - 10;
+	nameInput.text.dstR.w = nameInput.r.w;
+	nameInput.text.dstR.h = nameInput.r.h;
+	nameInput.text.dstR.x = nameInput.r.x;
+	nameInput.text.dstR.y = nameInput.r.y;
+	nameInput.text.autoAdjustW = true;
+	nameInput.text.wMultiplier = 0.5;
+	nameInput.cursorR.w = 8;
+	nameInput.cursorR.h = nameInput.r.h - 2;
+	nameInput.cursorR.x = nameInput.r.x;
+	nameInput.cursorR.y = nameInput.r.y + nameInput.r.h / 2 - nameInput.cursorR.h / 2;
+	nameInput.isSelected = true;
 	Text nameText;
 	nameText.setText(renderer, robotoF, u8"Nazwa");
 	nameText.dstR.w = 60;
 	nameText.dstR.h = 20;
 	nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
-	nameText.dstR.y = nameR.y - nameText.dstR.h;
-	Text nameInputText;
-	nameInputText.setText(renderer, robotoF, "");
-	nameInputText.dstR = nameR;
-	nameInputText.dstR.x += 3;
-	nameInputText.autoAdjustW = true;
-	nameInputText.wMultiplier = 0.5;
-	bool isNameSelected = true;
+	nameText.dstR.y = nameInput.r.y - nameText.dstR.h;
 	Text passwordText;
 	passwordText.setText(renderer, robotoF, u8"Hasło");
 	passwordText.dstR.w = 60;
 	passwordText.dstR.h = 20;
 	passwordText.dstR.x = windowWidth / 2 - passwordText.dstR.w / 2;
 	passwordText.dstR.y = windowHeight / 2.f + 10;
-	SDL_FRect passwordR;
-	passwordR.w = 200;
-	passwordR.h = 30;
-	passwordR.x = windowWidth / 2 - passwordR.w / 2;
-	passwordR.y = passwordText.dstR.y + passwordText.dstR.h;
-	Text passwordInputText;
-	passwordInputText.setText(renderer, robotoF, "");
-	passwordInputText.dstR = passwordR;
-	passwordInputText.dstR.x += 3;
-	passwordInputText.autoAdjustW = true;
-	passwordInputText.wMultiplier = 0.5;
+	Input passwordInput;
+	passwordInput.r.w = 200;
+	passwordInput.r.h = 30;
+	passwordInput.r.x = windowWidth / 2 - passwordInput.r.w / 2;
+	passwordInput.r.y = passwordText.dstR.y + passwordText.dstR.h;
+	passwordInput.text.dstR.w = passwordInput.r.w;
+	passwordInput.text.dstR.h = passwordInput.r.h;
+	passwordInput.text.dstR.x = passwordInput.r.x;
+	passwordInput.text.dstR.y = passwordInput.r.y;
+	passwordInput.text.autoAdjustW = true;
+	passwordInput.text.wMultiplier = 0.5;
+	passwordInput.cursorR.w = 8;
+	passwordInput.cursorR.h = passwordInput.r.h - 2;
+	passwordInput.cursorR.x = passwordInput.r.x;
+	passwordInput.cursorR.y = passwordInput.r.y + passwordInput.r.h / 2 - passwordInput.cursorR.h / 2;
+	passwordInput.isPassword = true;
 	Text infoText;
 	infoText.setText(renderer, robotoF, "");
 	infoText.dstR.w = 300;
@@ -1634,12 +1755,10 @@ int main(int argc, char* argv[])
 	ml.nameText.dstR.h = 20;
 	ml.nameText.dstR.x = ml.nameR.x + ml.nameR.w / 2 - ml.nameText.dstR.w / 2;
 	ml.nameText.dstR.y = ml.writeMessageBtnR.y;
-	ml.callT = IMG_LoadTexture(renderer, "res/call.png");
 	ml.callBtnR.w = 256;
 	ml.callBtnR.h = 60;
 	ml.callBtnR.x = ml.nameR.x + ml.nameR.w;
 	ml.callBtnR.y = windowHeight - ml.callBtnR.h;
-	ml.pickUpT = IMG_LoadTexture(renderer, "res/pickUp.png");
 	ml.pickUpBtnR.w = 256;
 	ml.pickUpBtnR.h = 60;
 	ml.pickUpBtnR.x = ml.callBtnR.x + ml.callBtnR.w + 5;
@@ -1649,6 +1768,11 @@ int main(int argc, char* argv[])
 	ml.callerNameText.dstR.h = 20;
 	ml.callerNameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
 	ml.callerNameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameText.dstR.h / 2;
+	ml.userInfoText.setText(renderer, robotoF, ""); // TODO: Set it to user data
+	ml.userInfoText.dstR = ml.nameR;
+	ml.userInfoText.dstR.x += 3;
+	ml.userInfoText.autoAdjustW = true;
+	ml.userInfoText.wMultiplier = 0.5;
 	std::string callerName;
 	std::string receiverName;
 #endif
@@ -1727,44 +1851,51 @@ int main(int argc, char* argv[])
 	msAddAttachmentBtnR.h = 64;
 	msAddAttachmentBtnR.x = msSendBtnR.x + msSendBtnR.w + 3;
 	msAddAttachmentBtnR.y = msSendBtnR.y;
-	MsSelectedWidget msSelectedWidget = MsSelectedWidget::Name;
-	SDL_FRect msNameR;
-	msNameR.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
-	msNameR.h = getValueFromValueAndPercent(closeBtnR.h, 70);
-	msNameR.x = closeBtnR.x + closeBtnR.w;
-	msNameR.y = 0;
+	bool msIsContentSelected = false;
+	Input msNameInput;
+	msNameInput.r.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
+	msNameInput.r.h = getValueFromValueAndPercent(closeBtnR.h, 70);
+	msNameInput.r.x = closeBtnR.x + closeBtnR.w;
+	msNameInput.r.y = 0;
 	Text msNameText;
 	msNameText.setText(renderer, robotoF, u8"Nazwa", { TEXT_COLOR });
 	msNameText.dstR.w = 60;
 	msNameText.dstR.h = 20;
-	msNameText.dstR.x = msNameR.x + msNameR.w / 2 - msNameText.dstR.w / 2;
+	msNameText.dstR.x = msNameInput.r.x + msNameInput.r.w / 2 - msNameText.dstR.w / 2;
 	msNameText.dstR.y = 0;
-	msNameR.y = msNameText.dstR.y + msNameText.dstR.h;
-	Text msNameInputText;
-	msNameInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
-	msNameInputText.dstR = msNameR;
-	msNameInputText.dstR.h *= 0.5;
-	msNameInputText.dstR.x += 3;
-	msNameInputText.dstR.y = msNameR.y + msNameR.h / 2 - msNameInputText.dstR.h / 2;
-	msNameInputText.autoAdjustW = true;
-	msNameInputText.wMultiplier = 0.3;
-	SDL_FRect msTopicR = msNameR;
-	msTopicR.x = msNameR.x + msNameR.w;
+	msNameInput.r.y = msNameText.dstR.y + msNameText.dstR.h;
+	msNameInput.text.dstR.w = msNameInput.r.w;
+	msNameInput.text.dstR.h = msNameInput.r.h;
+	msNameInput.text.dstR.x = msNameInput.r.x;
+	msNameInput.text.dstR.y = msNameInput.r.y;
+	msNameInput.text.autoAdjustW = true;
+	msNameInput.text.wMultiplier = 0.3;
+	msNameInput.cursorR.w = 8;
+	msNameInput.cursorR.h = msNameInput.r.h - 2;
+	msNameInput.cursorR.x = msNameInput.r.x;
+	msNameInput.cursorR.y = msNameInput.r.y + msNameInput.r.h / 2 - msNameInput.cursorR.h / 2;
+	msNameInput.isSelected = true;
+	Input msTopicInput;
+	msTopicInput.r = msNameInput.r;
+	msTopicInput.r.x = msNameInput.r.x + msNameInput.r.w;
+	msTopicInput.text.dstR.w = msTopicInput.r.w;
+	msTopicInput.text.dstR.h = msTopicInput.r.h;
+	msTopicInput.text.dstR.x = msTopicInput.r.x;
+	msTopicInput.text.dstR.y = msTopicInput.r.y;
+	msTopicInput.text.autoAdjustW = true;
+	msTopicInput.text.wMultiplier = 0.3;
+	msTopicInput.cursorR.w = 8;
+	msTopicInput.cursorR.h = msTopicInput.r.h - 2;
+	msTopicInput.cursorR.x = msTopicInput.r.x;
+	msTopicInput.cursorR.y = msTopicInput.r.y + msTopicInput.r.h / 2 - msTopicInput.cursorR.h / 2;
+	msTopicInput.isSelected = false;
 	Text msTopicText;
 	msTopicText.setText(renderer, robotoF, "Temat", { TEXT_COLOR });
 	msTopicText.dstR.w = 60;
 	msTopicText.dstR.h = 20;
-	msTopicText.dstR.x = msTopicR.x + msTopicR.w / 2 - msTopicText.dstR.w / 2;
+	msTopicText.dstR.x = msTopicInput.r.x + msTopicInput.r.w / 2 - msTopicText.dstR.w / 2;
 	msTopicText.dstR.y = msNameText.dstR.y;
 	msTopicText.autoAdjustW = true;
-	Text msTopicInputText;
-	msTopicInputText.setText(renderer, robotoF, "", { TEXT_COLOR });
-	msTopicInputText.dstR = msTopicR;
-	msTopicInputText.dstR.h *= 0.5;
-	msTopicInputText.dstR.x += 3;
-	msTopicInputText.dstR.y = msTopicR.y + msTopicR.h / 2 - msTopicInputText.dstR.h / 2;
-	msTopicInputText.autoAdjustW = true;
-	msTopicInputText.wMultiplier = 0.3;
 	Text msContentText;
 	msContentText.setText(renderer, robotoF, u8"Treść", { TEXT_COLOR });
 	msContentText.dstR.w = 60;
@@ -1822,7 +1953,6 @@ int main(int argc, char* argv[])
 	std::atomic<bool> shouldRunRecordingThread = true;
 	std::atomic<bool> shouldRunPlayingThread = true;
 	std::mutex socketReceiveMutex;
-	SDL_Texture* disconnectBtnT = IMG_LoadTexture(renderer, "res/disconnect.png");
 	SDL_FRect disconnectBtnR;
 	disconnectBtnR.w = 256;
 	disconnectBtnR.h = 64;
@@ -1834,6 +1964,12 @@ int main(int argc, char* argv[])
 		if (state == State::LoginAndRegister) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
+				if (nameInput.isSelected) {
+					nameInput.handleEvent(event, robotoF);
+				}
+				else {
+					passwordInput.handleEvent(event, robotoF);
+				}
 				if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
 					running = false;
 					// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -1844,20 +1980,13 @@ int main(int argc, char* argv[])
 				if (event.type == SDL_KEYDOWN) {
 					keys[event.key.keysym.scancode] = true;
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
-						isNameSelected = !isNameSelected;
-					}
-					if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-						if (isNameSelected) {
-							if (!nameInputText.text.empty()) {
-								popBack(nameInputText.text);
-								nameInputText.setText(renderer, robotoF, nameInputText.text, { TEXT_COLOR });
-								}
-							}
+						if (nameInput.isSelected) {
+							nameInput.isSelected = false;
+							passwordInput.isSelected = true;
+						}
 						else {
-							if (!passwordInputText.text.empty()) {
-								popBack(passwordInputText.text);
-								passwordInputText.setText(renderer, robotoF, passwordInputText.text, { TEXT_COLOR });
-							}
+							nameInput.isSelected = true;
+							passwordInput.isSelected = false;
 						}
 					}
 					if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
@@ -1879,7 +2008,7 @@ int main(int argc, char* argv[])
 						// TODO: Checkout possible security leaks in DH and possibly fix them (e.g man-in-the-middle)
 						// TODO: Remember that other file types like images should be unreadable after the encryption
 						sf::Packet p;
-						p << PacketType::Login << nameInputText.text << passwordInputText.text;
+						p << PacketType::Login << nameInput.text.text << passwordInput.text.text;
 						socket.send(p); // TODO: Do something on fail + put it on separate thread?
 						sf::Packet receivePacket;
 						socket.receive(receivePacket); // TODO: Do something on fail + put it on separate thread?
@@ -1898,11 +2027,13 @@ int main(int argc, char* argv[])
 				}
 				if (event.type == SDL_MOUSEBUTTONDOWN) {
 					buttons[event.button.button] = true;
-					if (SDL_PointInFRect(&mousePos, &nameR)) {
-						isNameSelected = true;
+					if (SDL_PointInRect(&mousePos, &nameInput.r)) {
+						nameInput.isSelected = true;
+						passwordInput.isSelected = false;
 					}
-					else if (SDL_PointInFRect(&mousePos, &passwordR)) {
-						isNameSelected = false;
+					else if (SDL_PointInRect(&mousePos, &passwordInput.r)) {
+						nameInput.isSelected = false;
+						passwordInput.isSelected = true;
 					}
 				}
 				if (event.type == SDL_MOUSEBUTTONUP) {
@@ -1916,38 +2047,22 @@ int main(int argc, char* argv[])
 					realMousePos.x = event.motion.x;
 					realMousePos.y = event.motion.y;
 				}
-				if (event.type == SDL_TEXTINPUT) {
-					if (isNameSelected) {
-						nameInputText.setText(renderer, robotoF, nameInputText.text + event.text.text, { TEXT_COLOR });
-					}
-					else {
-						passwordInputText.setText(renderer, robotoF, passwordInputText.text + event.text.text, { TEXT_COLOR });
-					}
-				}
 			}
 			SDL_SetRenderDrawColor(renderer, BG_COLOR);
 			SDL_RenderClear(renderer);
-			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-			SDL_RenderFillRectF(renderer, &nameR);
-			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-			if (isNameSelected) {
-				SDL_RenderDrawRectF(renderer, &nameR);
+			nameInput.draw(renderer, robotoF);
+			if (nameInput.isSelected) {
+				SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
+				SDL_RenderDrawRect(renderer, &nameInput.r);
 			}
 			nameText.draw(renderer);
-			drawInBorders(nameInputText, nameR, renderer, robotoF);
 
-			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-			SDL_RenderFillRectF(renderer, &passwordR);
-			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-			if (!isNameSelected) {
-				SDL_RenderDrawRectF(renderer, &passwordR);
+			passwordInput.draw(renderer, robotoF);
+			if (passwordInput.isSelected) {
+				SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
+				SDL_RenderDrawRect(renderer, &passwordInput.r);
 			}
 			passwordText.draw(renderer);
-
-			std::string currPassword = passwordInputText.text;
-			passwordInputText.setText(renderer, robotoF, std::string(getSize(currPassword), '*'), { TEXT_COLOR });
-			drawInBorders(passwordInputText, passwordR, renderer, robotoF);
-			passwordInputText.setText(renderer, robotoF, currPassword, { TEXT_COLOR });
 
 			infoText.draw(renderer);
 
@@ -2530,33 +2645,13 @@ int main(int argc, char* argv[])
 		else if (state == State::MessageSend) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
-				if (msSelectedWidget == MsSelectedWidget::Name) {
-					if (event.type == SDL_TEXTINPUT) {
-						msNameInputText.setText(renderer, robotoF, msNameInputText.text + event.text.text, { TEXT_COLOR });
-					}
-					if (event.type == SDL_KEYDOWN) {
-						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-							if (!msNameInputText.text.empty()) {
-								popBack(msNameInputText.text);
-								msNameInputText.setText(renderer, robotoF, msNameInputText.text, { TEXT_COLOR });
-							}
-						}
-					}
+				if (msNameInput.isSelected) {
+					msNameInput.handleEvent(event, robotoF);
 				}
-				else if (msSelectedWidget == MsSelectedWidget::Topic) {
-					if (event.type == SDL_TEXTINPUT) {
-						msTopicInputText.setText(renderer, robotoF, msTopicInputText.text + event.text.text, { TEXT_COLOR });
-					}
-					if (event.type == SDL_KEYDOWN) {
-						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-							if (!msTopicInputText.text.empty()) {
-								popBack(msTopicInputText.text);
-								msTopicInputText.setText(renderer, robotoF, msTopicInputText.text, { TEXT_COLOR });
-							}
-						}
-					}
+				else if (msTopicInput.isSelected) {
+					msTopicInput.handleEvent(event, robotoF);
 				}
-				else if (msSelectedWidget == MsSelectedWidget::Content) {
+				else if (msIsContentSelected) {
 					if (event.type == SDL_TEXTINPUT) {
 						msContentInputText.setText(renderer, robotoF, msContentInputText.text + event.text.text, { TEXT_COLOR });
 						textInputEventInMsContentInputText = true;
@@ -2564,7 +2659,7 @@ int main(int argc, char* argv[])
 					if (event.type == SDL_KEYDOWN) {
 						if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
 							if (!msContentInputText.text.empty()) {
-								popBack(msContentInputText.text);
+								utf8PopBack(msContentInputText.text);
 								if (!msContentInputText.text.empty() && msContentInputText.text.back() == '\036') {
 									msContentInputText.text.pop_back();
 								}
@@ -2587,9 +2682,17 @@ int main(int argc, char* argv[])
 				if (event.type == SDL_KEYDOWN) {
 					keys[event.key.keysym.scancode] = true;
 					if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
-						msSelectedWidget = (MsSelectedWidget)((int)msSelectedWidget + 1);
-						if (msSelectedWidget >= MsSelectedWidget::Count) {
-							msSelectedWidget = (MsSelectedWidget)0;
+						if (msNameInput.isSelected) {
+							msNameInput.isSelected = false;
+							msTopicInput.isSelected = true;
+						}
+						else if (msTopicInput.isSelected) {
+							msTopicInput.isSelected = false;
+							msIsContentSelected = true;
+						}
+						else if (msIsContentSelected) {
+							msIsContentSelected = false;
+							msNameInput.isSelected = true;
 						}
 					}
 				}
@@ -2603,7 +2706,7 @@ int main(int argc, char* argv[])
 						msAttachments.clear();
 					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						sendMessage(socket, msNameInputText, msTopicInputText, msContentInputText, nameInputText, msSelectedWidget, renderer, robotoF, msAttachments);
+						sendMessage(socket, msNameInput.text, msTopicInput.text, msContentInputText, nameInput.text, msTopicInput, msNameInput, msIsContentSelected, renderer, robotoF, msAttachments);
 					}
 					if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
 						const nfdpathset_t* outPaths;
@@ -2647,14 +2750,17 @@ int main(int argc, char* argv[])
 							NFD_PathSet_Free(outPaths);
 						}
 					}
-					else if (SDL_PointInFRect(&mousePos, &msNameR)) {
-						msSelectedWidget = MsSelectedWidget::Name;
+					else if (SDL_PointInRect(&mousePos, &msNameInput.r)) {
+						msNameInput.isSelected = true;
+						msTopicInput.isSelected = false;
 					}
-					else if (SDL_PointInFRect(&mousePos, &msTopicR)) {
-						msSelectedWidget = MsSelectedWidget::Topic;
+					else if (SDL_PointInRect(&mousePos, &msTopicInput.r)) {
+						msIsContentSelected = false;
+						msTopicInput.isSelected = true;
 					}
 					else if (SDL_PointInFRect(&mousePos, &msContentR)) {
-						msSelectedWidget = MsSelectedWidget::Content;
+						msIsContentSelected = true;
+						msNameInput.isSelected = false;
 					}
 					{
 						int i = 0;
@@ -2730,16 +2836,14 @@ int main(int argc, char* argv[])
 			}
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
 			SDL_RenderClear(renderer);
+			msNameInput.draw(renderer, robotoF);
+			msTopicInput.draw(renderer, robotoF);
 			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-			SDL_RenderFillRectF(renderer, &msNameR);
-			SDL_RenderFillRectF(renderer, &msTopicR);
 			SDL_RenderFillRectF(renderer, &msContentR);
 			SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
 			msNameText.draw(renderer);
 			msTopicText.draw(renderer);
 			msContentText.draw(renderer);
-			drawInBorders(msNameInputText, msNameR, renderer, robotoF);
-			drawInBorders(msTopicInputText, msTopicR, renderer, robotoF);
 
 			{
 				std::vector<Text> texts;
@@ -2803,13 +2907,13 @@ int main(int argc, char* argv[])
 			}
 
 			SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-			if (msSelectedWidget == MsSelectedWidget::Name) {
-				SDL_RenderDrawRectF(renderer, &msNameR);
+			if (msNameInput.isSelected) {
+				SDL_RenderDrawRect(renderer, &msNameInput.r);
 			}
-			else if (msSelectedWidget == MsSelectedWidget::Topic) {
-				SDL_RenderDrawRectF(renderer, &msTopicR);
+			else if (msTopicInput.isSelected) {
+				SDL_RenderDrawRect(renderer, &msTopicInput.r);
 			}
-			else if (msSelectedWidget == MsSelectedWidget::Content) {
+			else if (msIsContentSelected) {
 				SDL_RenderDrawRectF(renderer, &msContentR);
 			}
 			SDL_RenderCopyF(renderer, sendT, 0, &msSendBtnR);
@@ -2830,161 +2934,6 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRectF(renderer, &msAttachmentsScrollR);
 			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
 			SDL_RenderFillRectF(renderer, &msAttachmentsScrollBtnR);
-			SDL_RenderPresent(renderer);
-		}
-		else if (state == State::Call) {
-			SDL_Event event;
-			while (SDL_PollEvent(&event)) {
-				if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-					running = false;
-					// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
-				}
-				if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
-					SDL_RenderSetScale(renderer, event.window.data1 / (float)windowWidth, event.window.data2 / (float)windowHeight);
-				}
-				if (event.type == SDL_KEYDOWN) {
-					keys[event.key.keysym.scancode] = true;
-				}
-				if (event.type == SDL_KEYUP) {
-					keys[event.key.keysym.scancode] = false;
-				}
-				if (event.type == SDL_MOUSEBUTTONDOWN) {
-					buttons[event.button.button] = true;
-					if (SDL_PointInFRect(&mousePos, &disconnectBtnR)) {
-						isDisconnectedLocally = true;
-					}
-				}
-				if (event.type == SDL_MOUSEBUTTONUP) {
-					buttons[event.button.button] = false;
-				}
-				if (event.type == SDL_MOUSEMOTION) {
-					float scaleX, scaleY;
-					SDL_RenderGetScale(renderer, &scaleX, &scaleY);
-					mousePos.x = event.motion.x / scaleX;
-					mousePos.y = event.motion.y / scaleY;
-					realMousePos.x = event.motion.x;
-					realMousePos.y = event.motion.y;
-				}
-			}
-			socketReceiveMutex.lock();
-			{
-				sf::Packet p;
-				p << PacketType::DoesCallExits << callerName;
-				socket.send(p); // TODO: Do something on fail + put it on separate thread?
-			}
-			{
-				sf::Packet p;
-				socket.receive(p); // TODO: Do something on fail + put it on separate thread?
-				bool doesCallExists;
-				p >> doesCallExists;
-				if (!doesCallExists) {
-					isDisconnectedRemotely = true;
-				}
-			}
-			socketReceiveMutex.unlock();
-
-			if (isDisconnectedRemotely || isDisconnectedLocally) {
-#if 1 // NOTE: Wait for playingThread and recordingThread
-				while (true) {
-					if (shouldRunPlayingThread && shouldRunRecordingThread) {
-						break;
-					}
-				}
-#endif
-				if (isDisconnectedLocally) {
-					sf::Packet p;
-					p << PacketType::DisconnectCall << callerName;
-					socket.send(p); // TODO: Do something on fail + put it on separate thread?
-				}
-				state = State::MessageList;
-				isDisconnectedLocally = false;
-				isDisconnectedRemotely = false;
-				ml.callState = CallState::None;
-			}
-			else {
-				// TODO: Take care about data types when doing Client-Server and Server-Client sends
-				if (shouldRunRecordingThread) {
-					shouldRunRecordingThread = false;
-					std::thread t1([&] {
-#if 0 // TODO: Use it ???
-						if (!sf::SoundBufferRecorder::isAvailable()) {
-						}
-#endif
-						sf::SoundBufferRecorder recorder;
-						recorder.start();
-						std::this_thread::sleep_for(3s);
-						recorder.stop();
-						const sf::SoundBuffer& buffer = recorder.getBuffer();
-						sf::Packet p;
-						if (isCaller) {
-							p << PacketType::SendCallerAudioData;
-						}
-						else {
-							p << PacketType::SendReceiverAudioData;
-						}
-						std::string samplesStr;
-						for (sf::Uint64 i = 0; i < buffer.getSampleCount(); ++i) {
-							samplesStr += std::to_string(buffer.getSamples()[i]) + " ";
-						}
-						p << nameInputText.text << buffer.getSampleRate() << buffer.getChannelCount() << buffer.getSampleCount() << samplesStr;
-						socket.send(p); // TODO: Do something on fail + put it on separate thread?
-						shouldRunRecordingThread = true;
-						});
-					t1.detach();
-				}
-				if (shouldRunPlayingThread) {
-					shouldRunPlayingThread = false;
-					std::thread t2([&] {
-						socketReceiveMutex.lock();
-						{
-							sf::Packet p;
-							if (isCaller) {
-								p << PacketType::GetReceiverAudioData << receiverName;
-							}
-							else {
-								p << PacketType::GetCallerAudioData << callerName;
-							}
-							socket.send(p); // TODO: Do something on fail + put it on separate thread?
-						}
-						{
-							sf::Packet p;
-							socket.receive(p); // TODO: Do something on fail + put it on separate thread?
-							socketReceiveMutex.unlock();
-							unsigned sampleRate, channelCount;
-							sf::Uint64 sampleCount;
-							std::string samplesStr;
-							p >> sampleRate >> channelCount >> sampleCount >> samplesStr;
-							std::stringstream ss(samplesStr);
-							std::string line;
-							std::vector<sf::Int16> samples;
-							while (std::getline(ss, line, ' ')) {
-								samples.push_back(std::stoi(line));
-							}
-							sf::SoundBuffer buffer;
-							if (!samples.empty()) {
-								buffer.loadFromSamples(&samples[0], sampleCount, channelCount, sampleRate);
-								sf::Sound sound(buffer);
-								sound.play();
-								while (sound.getStatus() == sf::Sound::Status::Playing) {
-									;
-								}
-							}
-						}
-						shouldRunPlayingThread = true;
-						});
-					t2.detach();
-				}
-			}
-
-			r.x += dx;
-			if (r.x + r.w > windowWidth || r.x < 0) {
-				dx = -dx;
-			}
-			SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
-			SDL_RenderClear(renderer);
-			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-			SDL_RenderFillRect(renderer, &r);
-			SDL_RenderCopyF(renderer, disconnectBtnT, 0, &disconnectBtnR);
 			SDL_RenderPresent(renderer);
 		}
 	}
