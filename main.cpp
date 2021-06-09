@@ -139,6 +139,7 @@ enum PacketType : i32 {
 	LoginSuccess,
 	LoginFailure,
 	SendMessage,
+	SendMessageToClass,
 	ReceiveMessages,
 	MakeCall,
 	CheckCalls,
@@ -641,12 +642,17 @@ std::string readWholeFileInBinary(std::string path)
 	return ss.str();
 }
 
-void sendMessage(sf::TcpSocket& socket, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
+void sendMessage(sf::TcpSocket& socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, Text& msContentInputText, Text& nameInputText,
 	Input& msTopicInput, Input& msNameInput, bool& msIsContentSelected, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
 	sf::Packet packet;
+	if (msNameText.text == "Klasa") {
+		packet << PacketType::SendMessageToClass;
+	}
+	else {
+		packet << PacketType::SendMessage;
+	}
 	packet
-		<< PacketType::SendMessage
 		<< msNameInputText.text
 		<< msTopicInputText.text
 		<< msContentInputText.text;
@@ -674,6 +680,7 @@ enum class Scroll {
 struct Client {
 	std::shared_ptr<sf::TcpSocket> socket;
 	std::string name;
+	std::string className;
 	bool isLogged = false;
 
 	Client()
@@ -819,9 +826,9 @@ void runServer()
 									std::cerr << "Caught Exception..." << std::endl;
 									std::cerr << e.what() << std::endl;
 									std::cerr << std::endl;
-								}
+					}
 
-							}
+				}
 #endif
 							if (packetType == PacketType::Login) {
 								std::string name, password;
@@ -834,13 +841,14 @@ void runServer()
 									if (userNode.child("name").text().as_string() == name &&
 										userNode.child("password").text().as_string() == password) {
 										found = true;
+										clients[i].className = userNode.child("class").text().as_string();
 										break;
 									}
 								}
 								sf::Packet answerPacket;
 								if (found) {
 									// TODO: What will happen when someone will change it's IP address and sent some packet
-									answerPacket << PacketType::LoginSuccess;
+									answerPacket << PacketType::LoginSuccess << clients[i].className;
 									clients[i].isLogged = true;
 									clients[i].name = name;
 								}
@@ -857,7 +865,7 @@ void runServer()
 										auto messageNodes = doc.child("root").child("messages").children("message");
 										sf::Packet answerPacket;
 										for (pugi::xml_node& messageNode : messageNodes) {
-											if (messageNode.child("receiverName").text().as_string() == clients[i].name) {
+											if (messageNode.child("receiverName").text().as_string() == clients[i].name || messageNode.child("classReceiverName").text().as_string()== clients[i].className) {
 												answerPacket
 													<< messageNode.child("topic").text().as_string()
 													<< messageNode.child("senderName").text().as_string()
@@ -938,6 +946,64 @@ void runServer()
 										}
 										doc.save_file((prefPath + "data.xml").c_str());
 									}
+									else if (packetType == PacketType::SendMessageToClass) {
+										std::string msNameInputText;
+										std::string msTopicInputText;
+										std::string msContentInputText;
+										packet >> msNameInputText >> msTopicInputText >> msContentInputText;
+										pugi::xml_document doc;
+										doc.load_file((prefPath + "data.xml").c_str());
+										pugi::xml_node rootNode = doc.child("root");
+										int maxId = 0;
+#if 1 // NOTE: Find max id
+										{
+											auto messageNodes = rootNode.child("messages").children("message");
+											for (auto messageNode : messageNodes) {
+												int id = messageNode.child("id").text().as_int();
+												if (id > maxId) {
+													maxId = id;
+												}
+											}
+										}
+#endif
+										pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
+										pugi::xml_node idNode = messageNode.append_child("id");
+										pugi::xml_node classNameNode = messageNode.append_child("classReceiverName");
+										pugi::xml_node topicNode = messageNode.append_child("topic");
+										pugi::xml_node contentNode = messageNode.append_child("content");
+										pugi::xml_node senderNameNode = messageNode.append_child("senderName");
+										pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
+
+										idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
+										classNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
+										topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
+										contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
+										senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
+										dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
+										pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
+										{
+											std::string path, fileContent;
+											while (packet >> path >> fileContent) {
+												std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
+												std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
+												if (!fs::exists(storePathWithoutFilename)) {
+													fs::create_directories(storePathWithoutFilename);
+												}
+												std::string oldStorePathWithFilename = storePathWithFilename;
+												for (int i = 0; fs::exists(storePathWithFilename); ++i) {
+													storePathWithFilename = oldStorePathWithFilename;
+													storePathWithFilename += std::to_string(i);
+												}
+												std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+												ofs << fileContent;
+												pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
+												attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
+												attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
+											}
+										}
+										doc.save_file((prefPath + "data.xml").c_str());
+									}
+
 									else if (packetType == PacketType::MakeCall) {
 										std::string callerName, receiverName;
 										packet >> callerName >> receiverName;
@@ -1216,14 +1282,14 @@ void runServer()
 									// TODO: Possibly cheat
 								}
 							}
-						}
+			}
 						else if (clients[i].socket->receive(packet) == sf::Socket::Disconnected) {
 							selector.remove(*clients[i].socket);
 							clients.erase(clients.begin() + i--);
 						}
-					}
-				}
-			}
+		}
+	}
+}
 		}
 	}
 }
@@ -1768,8 +1834,11 @@ int main(int argc, char* argv[])
 	ml.callerNameText.dstR.h = 20;
 	ml.callerNameText.dstR.x = ml.pickUpBtnR.x + ml.pickUpBtnR.w;
 	ml.callerNameText.dstR.y = ml.pickUpBtnR.y + ml.pickUpBtnR.h / 2 - ml.callerNameText.dstR.h / 2;
-	ml.userInfoText.setText(renderer, robotoF, ""); // TODO: Set it to user data
-	ml.userInfoText.dstR = ml.nameR;
+	ml.userInfoText.setText(renderer, robotoF, "");
+	ml.userInfoText.dstR.w = 40;
+	ml.userInfoText.dstR.h = 20;
+	ml.userInfoText.dstR.x = windowWidth - ml.userInfoText.dstR.w;
+	ml.userInfoText.dstR.y = windowHeight - ml.userInfoText.dstR.h;
 	ml.userInfoText.dstR.x += 3;
 	ml.userInfoText.autoAdjustW = true;
 	ml.userInfoText.wMultiplier = 0.5;
@@ -1812,7 +1881,7 @@ int main(int argc, char* argv[])
 	Text attachmentsText;
 	attachmentsText.setText(renderer, robotoF, u8"Załączniki", { 255,255,255 });
 	attachmentsText.dstR.w = 70;
-	attachmentsText.dstR.h = 32;
+	attachmentsText.dstR.h = 24;
 	attachmentsText.dstR.x = windowWidth / 2 - attachmentsText.dstR.w / 2;
 	attachmentsText.dstR.y = contentR.y + contentR.h;
 	attachmentsText.autoAdjustW = true;
@@ -1840,6 +1909,7 @@ int main(int argc, char* argv[])
 #endif
 #if 1 // NOTE: MessageSend
 	SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
+	SDL_Texture* swapT = IMG_LoadTexture(renderer, "res/swap.png");
 	SDL_FRect msSendBtnR;
 	msSendBtnR.w = 256;
 	msSendBtnR.h = 64;
@@ -1852,10 +1922,15 @@ int main(int argc, char* argv[])
 	msAddAttachmentBtnR.x = msSendBtnR.x + msSendBtnR.w + 3;
 	msAddAttachmentBtnR.y = msSendBtnR.y;
 	bool msIsContentSelected = false;
+	SDL_FRect msSwapBtnR;
+	msSwapBtnR.w = closeBtnR.w;
+	msSwapBtnR.h = closeBtnR.h;
+	msSwapBtnR.x = closeBtnR.x + closeBtnR.w;
+	msSwapBtnR.y = closeBtnR.y;
 	Input msNameInput;
 	msNameInput.r.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
 	msNameInput.r.h = getValueFromValueAndPercent(closeBtnR.h, 70);
-	msNameInput.r.x = closeBtnR.x + closeBtnR.w;
+	msNameInput.r.x = msSwapBtnR.x + msSwapBtnR.w;
 	msNameInput.r.y = 0;
 	Text msNameText;
 	msNameText.setText(renderer, robotoF, u8"Nazwa", { TEXT_COLOR });
@@ -1869,7 +1944,7 @@ int main(int argc, char* argv[])
 	msNameInput.text.dstR.x = msNameInput.r.x;
 	msNameInput.text.dstR.y = msNameInput.r.y;
 	msNameInput.text.autoAdjustW = true;
-	msNameInput.text.wMultiplier = 0.3;
+	msNameInput.text.wMultiplier = 0.6;
 	msNameInput.cursorR.w = 8;
 	msNameInput.cursorR.h = msNameInput.r.h - 2;
 	msNameInput.cursorR.x = msNameInput.r.x;
@@ -1883,7 +1958,7 @@ int main(int argc, char* argv[])
 	msTopicInput.text.dstR.x = msTopicInput.r.x;
 	msTopicInput.text.dstR.y = msTopicInput.r.y;
 	msTopicInput.text.autoAdjustW = true;
-	msTopicInput.text.wMultiplier = 0.3;
+	msTopicInput.text.wMultiplier = 0.6;
 	msTopicInput.cursorR.w = 8;
 	msTopicInput.cursorR.h = msTopicInput.r.h - 2;
 	msTopicInput.cursorR.x = msTopicInput.r.x;
@@ -2016,6 +2091,9 @@ int main(int argc, char* argv[])
 						receivePacket >> receivePacketType;
 						if (receivePacketType == PacketType::LoginSuccess) {
 							state = State::MessageList;
+							std::string className;
+							receivePacket >> className;
+							ml.userInfoText.setText(renderer, robotoF, nameInput.text.text + " " + className, { 255,255,255 });
 						}
 						else if (receivePacketType == PacketType::LoginFailure) {
 							infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
@@ -2265,8 +2343,8 @@ int main(int argc, char* argv[])
 					callerSurname = surnameInputText.text;
 					ml.isNameSelected = true;
 					state = State::Call;
+					}
 				}
-			}
 #endif
 			sf::Packet sentPacket;
 			sentPacket << PacketType::ReceiveMessages;
@@ -2406,10 +2484,13 @@ int main(int argc, char* argv[])
 			if (ml.callState == CallState::ReceiverPending) {
 				SDL_RenderCopyF(renderer, ml.pickUpT, 0, &ml.pickUpBtnR);
 				ml.callerNameAndSurnameText.draw(renderer);
-			}
+				}
 #endif
+			ml.userInfoText.dstR.x = windowWidth - ml.userInfoText.dstR.w;
+			ml.userInfoText.dstR.y = windowHeight - ml.userInfoText.dstR.h;
+			ml.userInfoText.draw(renderer);
 			SDL_RenderPresent(renderer);
-		}
+			}
 		else if (state == State::MessageContent) {
 			SDL_Event event;
 			while (SDL_PollEvent(&event)) {
@@ -2705,8 +2786,16 @@ int main(int argc, char* argv[])
 						state = State::MessageList;
 						msAttachments.clear();
 					}
+					if (SDL_PointInFRect(&mousePos, &msSwapBtnR)) {
+						if (msNameText.text == "Klasa") {
+							msNameText.setText(renderer, robotoF, "Imie", {});
+						}
+						else {
+							msNameText.setText(renderer, robotoF, "Klasa", {});
+						}
+					}
 					if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-						sendMessage(socket, msNameInput.text, msTopicInput.text, msContentInputText, nameInput.text, msTopicInput, msNameInput, msIsContentSelected, renderer, robotoF, msAttachments);
+						sendMessage(socket, msNameText, msNameInput.text, msTopicInput.text, msContentInputText, nameInput.text, msTopicInput, msNameInput, msIsContentSelected, renderer, robotoF, msAttachments);
 					}
 					if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
 						const nfdpathset_t* outPaths;
@@ -2753,14 +2842,17 @@ int main(int argc, char* argv[])
 					else if (SDL_PointInRect(&mousePos, &msNameInput.r)) {
 						msNameInput.isSelected = true;
 						msTopicInput.isSelected = false;
+						msIsContentSelected = false;
 					}
 					else if (SDL_PointInRect(&mousePos, &msTopicInput.r)) {
-						msIsContentSelected = false;
+						msNameInput.isSelected = false;
 						msTopicInput.isSelected = true;
+						msIsContentSelected = false;
 					}
 					else if (SDL_PointInFRect(&mousePos, &msContentR)) {
-						msIsContentSelected = true;
 						msNameInput.isSelected = false;
+						msTopicInput.isSelected = false;
+						msIsContentSelected = true;
 					}
 					{
 						int i = 0;
@@ -2934,9 +3026,10 @@ int main(int argc, char* argv[])
 			SDL_RenderFillRectF(renderer, &msAttachmentsScrollR);
 			SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
 			SDL_RenderFillRectF(renderer, &msAttachmentsScrollBtnR);
+			SDL_RenderCopyF(renderer, swapT, 0, &msSwapBtnR);
 			SDL_RenderPresent(renderer);
 		}
-	}
+			}
 	// TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
 	return 0;
-}
+		}
