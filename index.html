@@ -60,14 +60,26 @@
             min-width: 20%;
             text-align: center;
         }
+
+        #trailer {
+            width: 100%;
+            height: 100%;
+            margin-bottom: 5px;
+            opacity: 0.9;
+        }
+
+        @media (min-width: 768px) {
+            #trailer {
+                width: 60%;
+            }
+        }
     </style>
 </head>
 
 <body>
     <div id="header">Sender</div>
     <div id="content">
-        <iframe style="width: 60%; height: 100%; margin-bottom: 5px; opacity: 0.9;"
-            src="https://youtube.com/embed/N7490Lpw6JU?autoplay=1&mute=1&playlist=N7490Lpw6JU&loop=1">
+        <iframe id="trailer" src="https://youtube.com/embed/N7490Lpw6JU?autoplay=1&mute=1&playlist=N7490Lpw6JU&loop=1">
         </iframe>
         <div id="downloadBtn">Download</div>
         <a href="https://github.com/huberti1/Sender" id="sourceCodeBtn">
