@@ -3041,7 +3041,7 @@ int main(int argc, char* argv[])
                     }
                     if (SDL_PointInFRect(&mousePos, &msSwapBtnR)) {
                         if (msNameText.text == "Klasa") {
-                            msNameText.setText(renderer, robotoF, "Imie", {});
+                            msNameText.setText(renderer, robotoF, "Nazwa", {});
                         }
                         else {
                             msNameText.setText(renderer, robotoF, "Klasa", {});
