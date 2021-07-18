@@ -659,16 +659,28 @@ struct TextEditInput {
         scrollUpCount = 0;
     }
 
+    void putTypedTextIntoInput(SDL_Event event, SDL_Renderer* renderer, TTF_Font* font)
+    {
+        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
+        str.insert(currentCursorLetterIndex, utf8ToUcs4(std::string(event.text.text)));
+        texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
+    }
+
+    void moveCursorOneCharacterRight(SDL_Renderer* renderer, TTF_Font* font)
+    {
+        ++currentCursorLetterIndex;
+        Text text = texts[currentCursorTextIndex];
+        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
+        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
+        cursorR.x = text.dstR.x + text.dstR.w;
+    }
+
     void handleEvent(SDL_Event event, SDL_Renderer* renderer, TTF_Font* font)
     {
         if (event.type == SDL_TEXTINPUT) {
-            std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-            str.insert(currentCursorLetterIndex, utf8ToUcs4(std::string(event.text.text)));
-            texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
-            ++currentCursorLetterIndex;
-            Text text = texts[currentCursorTextIndex];
-            text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-            cursorR.x = text.dstR.x + text.dstR.w;
+            // TODO: When the user have text excedeed down border and it enters it on the top it shouldn't always scroll
+            putTypedTextIntoInput(event, renderer, font);
+            moveCursorOneCharacterRight(renderer, font);
             int currentCursorTextIndexBackup = currentCursorTextIndex;
             bool isFirstIteration = true;
             while (texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w > r.x + r.w) {
@@ -698,8 +710,20 @@ struct TextEditInput {
                 ++currentCursorTextIndex;
                 isFirstIteration = false;
             }
+
             currentCursorTextIndex = currentCursorTextIndexBackup;
-            // NOTE: If it got out of down border move up texts and cursor
+            const int maxVisiableCount = 6;
+            if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+            {
+                for (int i = 0; i < texts.size(); ++i) {
+                    texts[i].dstR.y -= texts[i].dstR.h;
+                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                }
+                ++scrollUpCount;
+            }
+// TODO: It should scroll down when the user presses enter in the last line.
+// NOTE: If it got out of down border move up texts and cursor
+#if 0
             if (texts.back().dstR.y + texts.back().dstR.h > r.y + r.h) {
                 for (int i = 0; i < texts.size(); ++i) {
                     texts[i].dstR.y -= texts[i].dstR.h;
@@ -707,45 +731,63 @@ struct TextEditInput {
                 }
                 ++scrollUpCount;
             }
+#endif
         }
         if (event.type == SDL_KEYDOWN) {
             if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
                 std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                if (!str.empty() && currentCursorLetterIndex != 0) {
-                    --currentCursorLetterIndex;
-                    str.erase(currentCursorLetterIndex, 1);
-                    texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
-                    Text text = texts[currentCursorTextIndex];
-                    text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                    cursorR.x = text.dstR.x + text.dstR.w;
-                    if (str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
-                        texts.erase(texts.begin() + currentCursorTextIndex);
-                        --currentCursorTextIndex;
-                        currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                        cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                        cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                        if (scrollUpCount > 0) {
-                            for (int i = 0; i < texts.size(); ++i) {
-                                texts[i].dstR.y += texts[i].dstR.h;
-                                cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                if (!str.empty()) {
+                    if (currentCursorLetterIndex) {
+                        --currentCursorLetterIndex;
+                        str.erase(currentCursorLetterIndex, 1);
+                        texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
+                        Text text = texts[currentCursorTextIndex];
+                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
+                        cursorR.x = text.dstR.x + text.dstR.w;
+                        // TODO: It should be possible to remove "enter"
+                        if (str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
+                            texts.erase(texts.begin() + currentCursorTextIndex);
+                            --currentCursorTextIndex;
+                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
+                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
+                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                            if (scrollUpCount > 0) {
+                                for (int i = 0; i < texts.size(); ++i) {
+                                    texts[i].dstR.y += texts[i].dstR.h;
+                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                                }
+                                --scrollUpCount;
                             }
-                            --scrollUpCount;
+                        }
+                        else if (!str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
+                            --currentCursorTextIndex;
+                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
+                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
+                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                            if (scrollUpCount > 0) {
+                                for (int i = 0; i < texts.size(); ++i) {
+                                    texts[i].dstR.y += texts[i].dstR.h;
+                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                                }
+                                --scrollUpCount;
+                            }
                         }
                     }
-                    else if (!str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
-                        --currentCursorTextIndex;
-                        currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                        cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                        cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                        if (scrollUpCount > 0) {
-                            for (int i = 0; i < texts.size(); ++i) {
-                                texts[i].dstR.y += texts[i].dstR.h;
-                                cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                    else {
+                        if (currentCursorTextIndex) {
+                            --currentCursorTextIndex;
+                            str = utf8ToUcs4(texts[currentCursorTextIndex].text);
+                            if (!str.empty()) {
+                                str.pop_back();
                             }
-                            --scrollUpCount;
+                            texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
+                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
+                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
+                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
                         }
                     }
                 }
+#if 0
                 std::string s;
                 for (int i = 0; i < texts.size(); ++i) {
                     s += texts[i].text;
@@ -765,8 +807,45 @@ struct TextEditInput {
                     }
                     text = texts.back();
                 } while (!s.empty());
+#endif
+            }
+            else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
+                const int maxVisiableCount = 6;
+                if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+                {
+                    for (int i = 0; i < texts.size(); ++i) {
+                        texts[i].dstR.y -= texts[i].dstR.h;
+                        cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+                    }
+                    ++scrollUpCount;
+                }
+                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
+                texts[currentCursorTextIndex + 1].dstR.y += texts[currentCursorTextIndex + 1].dstR.h;
+                // TODO: Is substr with currentCursorLetterIndex correct?
+                std::string left = texts[currentCursorTextIndex].text.substr(0, currentCursorLetterIndex);
+                std::string right = texts[currentCursorTextIndex].text.substr(currentCursorLetterIndex);
+                texts[currentCursorTextIndex].setText(renderer, font, left, {});
+                texts[currentCursorTextIndex + 1].setText(renderer, font, right, {});
+                ++currentCursorTextIndex;
+                currentCursorLetterIndex = 0;
+                cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
+                cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
+
+#if 0
+                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
+                // TODO: Implement
+                // TODO: Create new Text() and put everything after currentCursorLetterIndex on the next line
+                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
+                texts[currentCursorTextIndex + 1].dstR.y += texts[currentCursorTextIndex + 1].dstR.h;
+                // TODO: Is substr range correct?
+                std::string left = texts[currentCursorTextIndex].text.substr(0, currentCursorLetterIndex);
+                std::string right = texts[currentCursorTextIndex].text.substr(currentCursorLetterIndex);
+                texts[currentCursorTextIndex].setText(renderer, font, left, {});
+                texts[currentCursorTextIndex + 1].setText(renderer, font, right, {});
+#endif
             }
             else if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) {
+                // TODO: When moving at the beginning of text created by enter it should allow to move at the beginning of text
                 --currentCursorLetterIndex;
                 if (currentCursorLetterIndex == 0 || currentCursorLetterIndex == -1) {
                     if (currentCursorTextIndex) {
