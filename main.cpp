@@ -675,6 +675,11 @@ struct TextEditInput {
         cursorR.x = text.dstR.x + text.dstR.w;
     }
 
+    int getMaxVisiableCount()
+    {
+        return r.h / texts.front().dstR.h;
+    }
+
     void handleEvent(SDL_Event event, SDL_Renderer* renderer, TTF_Font* font)
     {
         if (event.type == SDL_TEXTINPUT) {
@@ -712,8 +717,7 @@ struct TextEditInput {
             }
 
             currentCursorTextIndex = currentCursorTextIndexBackup;
-            const int maxVisiableCount = 6;
-            if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+            if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
             {
                 for (int i = 0; i < texts.size(); ++i) {
                     texts[i].dstR.y -= texts[i].dstR.h;
@@ -810,8 +814,7 @@ struct TextEditInput {
 #endif
             }
             else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-                const int maxVisiableCount = 6;
-                if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+                if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
                 {
                     for (int i = 0; i < texts.size(); ++i) {
                         texts[i].dstR.y -= texts[i].dstR.h;
@@ -892,8 +895,7 @@ struct TextEditInput {
                 cursorR.x = text.dstR.x + text.dstR.w;
                 if (currentCursorLetterIndex > texts[currentCursorTextIndex].text.size()) {
                     if (currentCursorTextIndex != texts.size() - 1) {
-                        const int maxVisiableCount = 6;
-                        if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+                        if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
                         {
                             if (currentCursorTextIndex != texts.size() - 1) {
                                 for (int i = 0; i < texts.size(); ++i) {
@@ -918,8 +920,7 @@ struct TextEditInput {
                 }
             }
             else if (event.key.keysym.scancode == SDL_SCANCODE_DOWN) {
-                const int maxVisiableCount = 6;
-                if (maxVisiableCount - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
+                if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
                 {
                     if (currentCursorTextIndex != texts.size() - 1) {
                         for (int i = 0; i < texts.size(); ++i) {
