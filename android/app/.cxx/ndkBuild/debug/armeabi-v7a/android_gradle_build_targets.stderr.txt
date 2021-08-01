@@ -1,0 +1,29 @@
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2183:73: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                           ~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2183:73: note: place parentheses around the '&&' expression to silence this warning
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                                                        ^
+                                              (                                                                            )
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2299:73: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                           ~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2299:73: note: place parentheses around the '&&' expression to silence this warning
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                                                        ^
+                                              (                                                                            )
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2647:73: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                           ~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2647:73: note: place parentheses around the '&&' expression to silence this warning
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                                                        ^
+                                              (                                                                            )
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2912:73: warning: '&&' within '||' [-Wlogical-op-parentheses]
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                           ~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/home/dev/Sender/android/app/jni/src/../../../../main.cpp:2912:73: note: place parentheses around the '&&' expression to silence this warning
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                                                                        ^
+                                              (                                                                            )
+4 warnings generated.

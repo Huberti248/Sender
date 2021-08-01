@@ -12,12 +12,21 @@ TODO:
 - Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
 */
+#ifdef __linux__
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_mixer.h>
+#include <SDL2/SDL_net.h>
+#include <SDL2/SDL_syswm.h>
+#include <SDL2/SDL_ttf.h>
+#else
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL_mixer.h>
 #include <SDL_net.h>
 #include <SDL_syswm.h>
 #include <SDL_ttf.h>
+#endif
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -32,49 +41,48 @@ TODO:
 #include <unordered_map>
 #include <vector>
 //#include <SDL_gpu.h>
-#include <SFML/Audio.hpp>
-#include <SFML/Network.hpp>
+//#include <SFML/Audio.hpp>
+//#include <SFML/Network.hpp>
 //#include <SFML/Graphics.hpp>
-#include <aes.h>
 #include <algorithm>
 #include <assert.h>
 #include <atomic>
-#include <boost/locale.hpp>
 #include <codecvt>
-#include <cryptlib.h>
+//#include <cryptlib.h>
 #include <cstdlib>
 #include <ctime>
-#include <dh.h>
-#include <dh2.h>
-#include <elgamal.h>
-#include <fhmqv.h>
-#include <filters.h>
+//#include <dh.h>
+//#include <dh2.h>
+//#include <elgamal.h>
+//#include <fhmqv.h>
+//#include <filters.h>
 #include <fstream>
 #include <functional>
-#include <gcm.h>
-#include <hex.h>
-#include <hmqv.h>
+//#include <gcm.h>
+//#include <hex.h>
+//#include <hmqv.h>
 #include <iostream>
 #include <locale>
-#include <modes.h>
-#include <mqv.h>
+//#include <modes.h>
+//#include <mqv.h>
 #include <mutex>
-#include <nbtheory.h>
-#include <nfd.h>
-#include <osrng.h>
+//#include <nbtheory.h>
+#include "vendor/NATIVEFILEDIALOGEXTENDED/src/include/nfd.h"
+//#include <nfd.h>
+//#include <osrng.h>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <thread>
 #include <vector>
-#ifdef __ANDROID__
 #include "vendor/PUGIXML/src/pugixml.hpp"
+#ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
 #include <jni.h>
+namespace fs = std::__fs::filesystem;
 #else
 #include <filesystem>
-#include <pugixml.hpp>
 namespace fs = std::filesystem;
 #endif
 #ifdef _WIN32
@@ -83,7 +91,7 @@ namespace fs = std::filesystem;
 #include <windows.h>
 #endif
 
-using namespace std::chrono_literals;
+//using namespace std::chrono_literals;
 
 // NOTE: Remember to uncomment it on every release
 //#define RELEASE 1
@@ -114,16 +122,17 @@ std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 #endif
 #define BG_COLOR 0, 0, 0, 0
 #define TEXT_COLOR 0, 0, 0, 0
-#define SERVER_PORT 4800 // TODO: Set some other port?
+#define SERVER_PORT 5123
+#define MAX_SOCKETS 65534
 
-#define i8 sf::Int8
-#define i16 sf::Int16
-#define i32 sf::Int32
-#define i64 sf::Int64
-#define u8 sf::Uint8
-#define u16 sf::Uint16
-#define u32 sf::Uint32
-#define u64 sf::Uint64
+#define i8 int8_t
+#define i16 int16_t
+#define i32 int32_t
+#define i64 int64_t
+#define u8 uint8_t
+#define u16 uint16_t
+#define u32 uint32_t
+#define u64 uint64_t
 
 const int TAG_SIZE = 12;
 
@@ -166,7 +175,7 @@ std::string toStdString(std::wstring str)
 
 void logOutputCallback(void* userdata, int category, SDL_LogPriority priority, const char* message)
 {
-    std::printf("%s\n", message);
+    printf("%s\n", message);
 }
 
 int random(int min, int max)
@@ -207,6 +216,22 @@ std::ostream& operator<<(std::ostream& os, SDL_Rect r)
     fR.y = r.y;
     os << fR;
     return os;
+}
+
+std::wstring s2ws(const std::string& str)
+{
+    using convert_typeX = std::codecvt_utf8<wchar_t>;
+    std::wstring_convert<convert_typeX, wchar_t> converterX;
+
+    return converterX.from_bytes(str);
+}
+
+std::string ws2s(const std::wstring& wstr)
+{
+    using convert_typeX = std::codecvt_utf8<wchar_t>;
+    std::wstring_convert<convert_typeX, wchar_t> converterX;
+
+    return converterX.to_bytes(wstr);
 }
 
 struct Text {
@@ -325,14 +350,6 @@ int eventWatch(void* userdata, SDL_Event* event)
     if (event->type == SDL_APP_TERMINATING || event->type == SDL_APP_WILLENTERBACKGROUND) {
     }
     return 0;
-}
-
-sf::Packet& operator>>(sf::Packet& packet, PacketType& packetType)
-{
-    i32 tmp;
-    packet >> tmp;
-    packetType = (PacketType)tmp;
-    return packet;
 }
 
 // Get current date/time, format is YYYY-MM-DD HH:mm:ss
@@ -463,12 +480,14 @@ enum MsSelectedWidget {
 
 std::string ucs4ToUtf8(const std::u32string& in)
 {
-    return boost::locale::conv::utf_to_utf<char>(in);
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+    return conv.to_bytes(in);
 }
 
 std::u32string utf8ToUcs4(const std::string& in)
 {
-    return boost::locale::conv::utf_to_utf<char32_t>(in);
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+    return conv.from_bytes(in);
 }
 
 std::string utf8Substr(const std::string& str, unsigned int start, unsigned int leng)
@@ -998,26 +1017,48 @@ std::string readWholeFileInBinary(std::string path)
     return ss.str();
 }
 
-void sendMessage(sf::TcpSocket& socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, TextEditInput& msContentTextEditInput, Text& nameInputText,
+#define MAX_LENGTH 1024 * 100
+
+int send(TCPsocket socket, std::string msg)
+{
+    return SDLNet_TCP_Send(socket, msg.c_str(), msg.size() + 1);
+}
+
+int receive(TCPsocket socket, std::string& msg)
+{
+    char message[MAX_LENGTH]{};
+    int result = SDLNet_TCP_Recv(socket, message, MAX_LENGTH);
+    msg = message;
+    return result;
+}
+
+void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, TextEditInput& msContentTextEditInput, Text& nameInputText,
     Input& msTopicInput, Input& msNameInput, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
-    sf::Packet packet;
+    pugi::xml_document doc;
+    pugi::xml_node rootNode = doc.append_child("root");
     if (msNameText.text == "Klasa") {
-        packet << PacketType::SendMessageToClass;
+        rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::SendMessageToClass).c_str());
     }
     else {
-        packet << PacketType::SendMessage;
+        rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::SendMessage).c_str());
     }
-    packet
-        << msNameInputText.text
-        << msTopicInputText.text
-        << msContentTextEditInput.getText();
+    pugi::xml_node msNameInputNode = rootNode.append_child("msNameInput");
+    msNameInputNode.append_child(pugi::node_pcdata).set_value(msNameInputText.text.c_str());
+    pugi::xml_node msTopicInputNode = rootNode.append_child("msTopicInput");
+    msTopicInputNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.text.c_str());
+    pugi::xml_node msContentInputNode = rootNode.append_child("msContentInput");
+    msContentInputNode.append_child(pugi::node_pcdata).set_value(msContentTextEditInput.getText().c_str());
     for (int i = 0; i < attachments.size(); ++i) {
-        packet
-            << attachments[i].path
-            << attachments[i].fileContent.c_str();
+        pugi::xml_node attachmentNode = rootNode.append_child("attachment");
+        pugi::xml_node pathNode = attachmentNode.append_child("path");
+        pathNode.append_child(pugi::node_pcdata).set_value(attachments[i].path.c_str());
+        pugi::xml_node fileContentNode = attachmentNode.append_child("fileContent");
+        fileContentNode.append_child(pugi::node_pcdata).set_value(attachments[i].fileContent.c_str());
     }
-    socket.send(packet); // TODO: Do something on fail + put it on separate thread?
+    std::stringstream ss;
+    doc.save(ss);
+    send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
     msNameInputText.setText(renderer, font, "");
     msTopicInputText.setText(renderer, font, "");
     msContentTextEditInput.clear(renderer, font);
@@ -1026,24 +1067,6 @@ void sendMessage(sf::TcpSocket& socket, Text msNameText, Text& msNameInputText, 
     msContentTextEditInput.isSelected = false;
     attachments.clear();
 }
-
-enum class Scroll {
-    None,
-    Up,
-    Down,
-};
-
-struct Client {
-    std::shared_ptr<sf::TcpSocket> socket;
-    std::string name;
-    std::string className;
-    bool isLogged = false;
-
-    Client()
-    {
-        socket = std::make_shared<sf::TcpSocket>();
-    }
-};
 
 std::vector<pugi::xml_node> pugiXmlObjectRangeToStdVector(pugi::xml_object_range<pugi::xml_named_node_iterator> xmlObjectRange)
 {
@@ -1078,570 +1101,271 @@ std::string deleteFilename(std::string path)
     }
 }
 
+struct Client {
+    TCPsocket socket = 0;
+    std::string name;
+    std::string className;
+    bool isLogged = false;
+};
+
+std::vector<Client> clients;
+
+bool exists(std::string path)
+{
+#ifdef __ANDROID__
+    std::ifstream ifs(path);
+    return ifs.operator bool();
+#else
+    return fs::exists(path);
+#endif
+}
+
+bool exists(std::wstring path)
+{
+#ifdef __ANDROID__
+    std::ifstream ifs(ws2s(path));
+    return ifs.operator bool();
+#else
+    return fs::exists(path);
+#endif
+}
+
 void runServer()
 {
-    sf::TcpListener listener;
-    listener.listen(SERVER_PORT);
-    std::vector<Client> clients;
-    sf::SocketSelector selector;
-    selector.add(listener);
+    IPaddress ip;
+    SDLNet_ResolveHost(&ip, 0, SERVER_PORT);
+    TCPsocket serverSocket = SDLNet_TCP_Open(&ip);
+    SDLNet_SocketSet socketSet = SDLNet_AllocSocketSet(MAX_SOCKETS + 1); // TODO: Do something when the server is full
+    SDLNet_TCP_AddSocket(socketSet, serverSocket);
     bool running = true;
     while (running) {
-        if (selector.wait()) {
-            if (selector.isReady(listener)) {
+        if (SDLNet_CheckSockets(socketSet, 0) > 0) {
+            if (SDLNet_SocketReady(serverSocket)) {
                 clients.push_back(Client());
-                if (listener.accept(*(clients.back().socket)) == sf::Socket::Done) {
-                    selector.add(*(clients.back().socket));
-                }
-                else {
-                    clients.pop_back();
-                }
+                clients.back().socket = SDLNet_TCP_Accept(serverSocket);
+                SDLNet_TCP_AddSocket(socketSet, clients.back().socket);
+                printf("Client joined!\n");
             }
-            else {
-                for (int i = 0; i < clients.size(); ++i) {
-                    if (selector.isReady(*(clients[i].socket))) {
-                        if (!fs::exists(prefPath + "data.xml")) // NOTE: If the data.xml doesn't exist, create one
-                        {
+            for (int i = 0; i < clients.size(); ++i) {
+                if (SDLNet_SocketReady(clients[i].socket)) {
+                    if (!exists(prefPath + "data.xml")) // NOTE: If the data.xml doesn't exist, create one
+                    {
+                        pugi::xml_document doc;
+                        pugi::xml_node rootNode = doc.append_child("root");
+                        pugi::xml_node usersNode = rootNode.append_child("users");
+                        pugi::xml_node messagesNode = rootNode.append_child("messages");
+                        doc.save_file((prefPath + "data.xml").c_str());
+                    }
+                    std::string msg;
+                    int received = receive(clients[i].socket, msg);
+                    if (received > 0) {
+                        pugi::xml_document doc;
+                        doc.load_string(msg.c_str());
+                        PacketType packetType = (PacketType)doc.child("root").child("packetType").text().as_int();
+                        if (packetType == PacketType::Login) {
+                            std::string name = doc.child("root").child("name").text().as_string(), password = doc.child("root").child("password").text().as_string();
                             pugi::xml_document doc;
-                            pugi::xml_node rootNode = doc.append_child("root");
-                            pugi::xml_node usersNode = rootNode.append_child("users");
-                            pugi::xml_node messagesNode = rootNode.append_child("messages");
-                            doc.save_file((prefPath + "data.xml").c_str());
-                        }
-                        sf::Packet packet;
-                        if (clients[i].socket->receive(packet) == sf::Socket::Done) {
-                            PacketType packetType;
-                            packet >> packetType;
-#if 0
-							if (packetType == PacketType::Dh) {
-								// TODO: Disallow to do PacketType::Dh more than once???
-
-								CryptoPP::AutoSeededRandomPool prng;
-
-								prng.GenerateBlock(clients[i].aesKey, sizeof(clients[i].aesKey));
-
-								std::string publicKeyStr;
-								packet >> publicKeyStr;
-								CryptoPP::Integer publicKey(publicKeyStr.c_str());
-								publicKey.Encode(clients[i].aesKey, CryptoPP::AES::DEFAULT_KEYLENGTH);
-
-								sf::Packet answerPacket;
-								for (int j = 0; j < CryptoPP::AES::DEFAULT_KEYLENGTH; ++j) {
-									answerPacket << clients[i].aesKey[j];
-								}
-								clients[i].socket->send(answerPacket);
-							}
-							else if (packetType == PacketType::TestMessage) {
-								std::string rpdata;
-								byte iv[CryptoPP::AES::BLOCKSIZE];
-								std::string cipher;
-								packet >> cipher;
-								for (int i = 0; i < CryptoPP::AES::BLOCKSIZE; ++i) {
-									packet >> iv[i];
-								}
-								try {
-									CryptoPP::GCM< CryptoPP::AES >::Decryption d;
-									d.SetKeyWithIV(clients[i].aesKey, sizeof(clients[i].aesKey), iv, sizeof(iv));
-									// d.SpecifyDataLengths( 0, cipher.size()-TAG_SIZE, 0 );
-
-									CryptoPP::AuthenticatedDecryptionFilter df(d,
-										new CryptoPP::StringSink(rpdata),
-										CryptoPP::AuthenticatedDecryptionFilter::DEFAULT_FLAGS,
-										TAG_SIZE
-									); // AuthenticatedDecryptionFilter
-
-									// The StringSource dtor will be called immediately
-									//  after construction below. This will cause the
-									//  destruction of objects it owns. To stop the
-									//  behavior so we can get the decoding result from
-									//  the DecryptionFilter, we must use a redirector
-									//  or manually Put(...) into the filter without
-									//  using a StringSource.
-									CryptoPP::StringSource(cipher, true,
-										new CryptoPP::Redirector(df /*, PASS_EVERYTHING */)
-									); // StringSource
-
-									// If the object does not throw, here's the only
-									//  opportunity to check the data's integrity
-									bool b = df.GetLastResult();
-									assert(true == b);
-
-									std::cout << "recovered text: " << rpdata << std::endl;
-								}
-								catch (CryptoPP::HashVerificationFilter::HashVerificationFailed& e) {
-									std::cerr << "Caught HashVerificationFailed..." << std::endl;
-									std::cerr << e.what() << std::endl;
-									std::cerr << std::endl;
-								}
-								catch (CryptoPP::InvalidArgument& e) {
-									std::cerr << "Caught InvalidArgument..." << std::endl;
-									std::cerr << e.what() << std::endl;
-									std::cerr << std::endl;
-								}
-								catch (CryptoPP::Exception& e) {
-									std::cerr << "Caught Exception..." << std::endl;
-									std::cerr << e.what() << std::endl;
-									std::cerr << std::endl;
-					}
-
-				}
-#endif
-                            if (packetType == PacketType::Login) {
-                                std::string name, password;
-                                packet >> name >> password;
-                                pugi::xml_document doc;
-                                doc.load_file((prefPath + "data.xml").c_str());
-                                auto userNodes = doc.child("root").child("users").children("user");
-                                bool found = false;
-                                for (auto& userNode : userNodes) {
-                                    if (userNode.child("name").text().as_string() == name && userNode.child("password").text().as_string() == password) {
-                                        found = true;
-                                        clients[i].className = userNode.child("class").text().as_string();
-                                        break;
-                                    }
+                            doc.load_file((prefPath + "data.xml").c_str());
+                            auto userNodes = doc.child("root").child("users").children("user");
+                            bool found = false;
+                            for (auto& userNode : userNodes) {
+                                if (userNode.child("name").text().as_string() == name && userNode.child("password").text().as_string() == password) {
+                                    found = true;
+                                    clients[i].className = userNode.child("class").text().as_string();
+                                    break;
                                 }
-                                sf::Packet answerPacket;
+                            }
+                            {
+                                pugi::xml_document doc;
+                                pugi::xml_node rootNode = doc.append_child("root");
+                                pugi::xml_node packetTypeNode = rootNode.append_child("packetType");
                                 if (found) {
                                     // TODO: What will happen when someone will change it's IP address and sent some packet
-                                    answerPacket << PacketType::LoginSuccess << clients[i].className;
+                                    packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::LoginSuccess).c_str());
+                                    pugi::xml_node classNameNode = rootNode.append_child("className");
+                                    classNameNode.append_child(pugi::node_pcdata).set_value(clients[i].className.c_str());
                                     clients[i].isLogged = true;
                                     clients[i].name = name;
                                 }
                                 else {
-                                    answerPacket << PacketType::LoginFailure;
+                                    packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::LoginFailure).c_str());
                                 }
-                                clients[i].socket->send(answerPacket);
+                                std::stringstream ss;
+                                doc.save(ss);
+                                send(clients[i].socket, ss.str());
+                            }
+                        }
+                        else {
+                            if (clients[i].isLogged) {
+                                if (packetType == PacketType::ReceiveMessages) {
+                                    pugi::xml_document doc;
+                                    doc.load_file((prefPath + "data.xml").c_str());
+                                    auto messageNodes = doc.child("root").child("messages").children("message");
+                                    pugi::xml_document d;
+                                    pugi::xml_node rootNode = d.append_child("root");
+                                    for (pugi::xml_node& messageNode : messageNodes) {
+                                        if (messageNode.child("receiverName").text().as_string() == clients[i].name || messageNode.child("classReceiverName").text().as_string() == clients[i].className) {
+                                            pugi::xml_node currMessageNode = rootNode.append_child("message");
+
+                                            pugi::xml_node topicNode = currMessageNode.append_child("topic");
+                                            topicNode.append_child(pugi::node_pcdata).set_value(messageNode.child("topic").text().as_string());
+                                            pugi::xml_node senderNameNode = currMessageNode.append_child("senderName");
+                                            senderNameNode.append_child(pugi::node_pcdata).set_value(messageNode.child("senderName").text().as_string());
+                                            pugi::xml_node contentNode = currMessageNode.append_child("content");
+                                            contentNode.append_child(pugi::node_pcdata).set_value(messageNode.child("content").text().as_string());
+                                            pugi::xml_node dateTimeNode = currMessageNode.append_child("dateTime");
+                                            dateTimeNode.append_child(pugi::node_pcdata).set_value(messageNode.child("dateTime").text().as_string());
+                                            auto attachmentNodes = messageNode.child("attachments").children("attachment");
+                                            int attachmentNodesCount = 0;
+                                            {
+                                                for (pugi::xml_node& attachmentNode : attachmentNodes) {
+                                                    ++attachmentNodesCount;
+                                                }
+                                            }
+                                            pugi::xml_node attachmentNodesCountNode = currMessageNode.append_child("attachmentNodesCount");
+                                            attachmentNodesCountNode.append_child(pugi::node_pcdata).set_value(std::to_string(attachmentNodesCount).c_str());
+                                            for (pugi::xml_node& attachmentNode : attachmentNodes) {
+                                                pugi::xml_node attachmentNode2 = currMessageNode.append_child("attachment");
+                                                pugi::xml_node userPathNode = attachmentNode2.append_child("path");
+                                                userPathNode.append_child(pugi::node_pcdata).set_value(attachmentNode.child("userPath").text().as_string());
+                                                pugi::xml_node fileNode = attachmentNode2.append_child("file");
+                                                fileNode.append_child(pugi::node_pcdata).set_value(readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string()).c_str());
+                                            }
+                                        }
+                                    }
+                                    std::stringstream ss;
+                                    d.save(ss);
+                                    send(clients[i].socket, ss.str());
+                                }
+                                else if (packetType == PacketType::SendMessage) {
+                                    std::string msNameInputText = doc.child("root").child("msNameInput").text().as_string();
+                                    std::string msTopicInputText = doc.child("root").child("msTopicInput").text().as_string();
+                                    std::string msContentInputText = doc.child("root").child("msContentInput").text().as_string();
+                                    pugi::xml_document d;
+                                    d.load_file((prefPath + "data.xml").c_str());
+                                    pugi::xml_node rootNode = d.child("root");
+                                    int maxId = 0;
+#if 1 // NOTE: Find max id
+                                    {
+                                        auto messageNodes = rootNode.child("messages").children("message");
+                                        for (auto messageNode : messageNodes) {
+                                            int id = messageNode.child("id").text().as_int();
+                                            if (id > maxId) {
+                                                maxId = id;
+                                            }
+                                        }
+                                    }
+#endif
+
+                                    pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
+                                    pugi::xml_node idNode = messageNode.append_child("id");
+                                    pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
+                                    pugi::xml_node topicNode = messageNode.append_child("topic");
+                                    pugi::xml_node contentNode = messageNode.append_child("content");
+                                    pugi::xml_node senderNameNode = messageNode.append_child("senderName");
+                                    pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
+
+                                    idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
+                                    receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
+                                    topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
+                                    contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
+                                    senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
+                                    dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
+                                    pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
+                                    {
+                                        auto attachmentNodes = doc.child("root").children("attachment");
+                                        std::string path, fileContent;
+                                        for (auto it : attachmentNodes) {
+                                            path = it.child("path").text().as_string();
+                                            fileContent = it.child("fileContent").text().as_string();
+                                            std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
+                                            std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
+                                            if (!exists(storePathWithoutFilename)) {
+                                                fs::create_directories(storePathWithoutFilename);
+                                            }
+                                            std::string oldStorePathWithFilename = storePathWithFilename;
+                                            for (int i = 0; exists(storePathWithFilename); ++i) {
+                                                storePathWithFilename = oldStorePathWithFilename;
+                                                storePathWithFilename += std::to_string(i);
+                                            }
+                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+                                            ofs << fileContent;
+                                            pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
+                                            attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
+                                            attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
+                                        }
+                                    }
+                                    d.save_file((prefPath + "data.xml").c_str());
+                                }
+                                else if (packetType == PacketType::SendMessageToClass) {
+                                    std::string msNameInputText = doc.child("root").child("msNameInput").text().as_string();
+                                    std::string msTopicInputText = doc.child("root").child("msTopicInput").text().as_string();
+                                    std::string msContentInputText = doc.child("root").child("msContentInput").text().as_string();
+                                    pugi::xml_document d;
+                                    d.load_file((prefPath + "data.xml").c_str());
+                                    pugi::xml_node rootNode = d.child("root");
+                                    int maxId = 0;
+#if 1 // NOTE: Find max id
+                                    {
+                                        auto messageNodes = rootNode.child("messages").children("message");
+                                        for (auto messageNode : messageNodes) {
+                                            int id = messageNode.child("id").text().as_int();
+                                            if (id > maxId) {
+                                                maxId = id;
+                                            }
+                                        }
+                                    }
+#endif
+                                    pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
+                                    pugi::xml_node idNode = messageNode.append_child("id");
+                                    pugi::xml_node classNameNode = messageNode.append_child("classReceiverName");
+                                    pugi::xml_node topicNode = messageNode.append_child("topic");
+                                    pugi::xml_node contentNode = messageNode.append_child("content");
+                                    pugi::xml_node senderNameNode = messageNode.append_child("senderName");
+                                    pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
+
+                                    idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
+                                    classNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
+                                    topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
+                                    contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
+                                    senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
+                                    dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
+                                    pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
+                                    {
+                                        auto attachmentNodes = doc.child("root").children("attachment");
+                                        for (auto it : attachmentNodes) {
+                                            std::string path = it.child("path").text().as_string(), fileContent = it.child("fileContent").text().as_string();
+                                            std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
+                                            std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
+                                            if (!exists(storePathWithoutFilename)) {
+                                                fs::create_directories(storePathWithoutFilename);
+                                            }
+                                            std::string oldStorePathWithFilename = storePathWithFilename;
+                                            for (int i = 0; exists(storePathWithFilename); ++i) {
+                                                storePathWithFilename = oldStorePathWithFilename;
+                                                storePathWithFilename += std::to_string(i);
+                                            }
+                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+                                            ofs << fileContent;
+                                            pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
+                                            attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
+                                            attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
+                                        }
+                                    }
+                                    d.save_file((prefPath + "data.xml").c_str());
+                                }
                             }
                             else {
-                                if (clients[i].isLogged) {
-                                    if (packetType == PacketType::ReceiveMessages) {
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        auto messageNodes = doc.child("root").child("messages").children("message");
-                                        sf::Packet answerPacket;
-                                        for (pugi::xml_node& messageNode : messageNodes) {
-                                            if (messageNode.child("receiverName").text().as_string() == clients[i].name || messageNode.child("classReceiverName").text().as_string() == clients[i].className) {
-                                                answerPacket
-                                                    << messageNode.child("topic").text().as_string()
-                                                    << messageNode.child("senderName").text().as_string()
-                                                    << messageNode.child("content").text().as_string()
-                                                    << messageNode.child("dateTime").text().as_string();
-                                                auto attachmentNodes = messageNode.child("attachments").children("attachment");
-                                                int attachmentNodesCount = 0;
-                                                {
-                                                    for (pugi::xml_node& attachmentNode : attachmentNodes) {
-                                                        ++attachmentNodesCount;
-                                                    }
-                                                }
-                                                answerPacket << attachmentNodesCount;
-                                                for (pugi::xml_node& attachmentNode : attachmentNodes) {
-                                                    answerPacket
-                                                        << attachmentNode.child("userPath").text().as_string()
-                                                        << readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string());
-                                                }
-                                            }
-                                        }
-                                        clients[i].socket->send(answerPacket);
-                                    }
-                                    else if (packetType == PacketType::SendMessage) {
-                                        std::string msNameInputText;
-                                        std::string msTopicInputText;
-                                        std::string msContentInputText;
-                                        packet >> msNameInputText >> msTopicInputText >> msContentInputText;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        int maxId = 0;
-#if 1 // NOTE: Find max id
-                                        {
-                                            auto messageNodes = rootNode.child("messages").children("message");
-                                            for (auto messageNode : messageNodes) {
-                                                int id = messageNode.child("id").text().as_int();
-                                                if (id > maxId) {
-                                                    maxId = id;
-                                                }
-                                            }
-                                        }
-#endif
-
-                                        pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
-                                        pugi::xml_node idNode = messageNode.append_child("id");
-                                        pugi::xml_node receiverNameNode = messageNode.append_child("receiverName");
-                                        pugi::xml_node topicNode = messageNode.append_child("topic");
-                                        pugi::xml_node contentNode = messageNode.append_child("content");
-                                        pugi::xml_node senderNameNode = messageNode.append_child("senderName");
-                                        pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
-
-                                        idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
-                                        receiverNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
-                                        topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
-                                        contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
-                                        senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
-                                        dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
-                                        pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
-                                        {
-                                            std::string path, fileContent;
-                                            while (packet >> path >> fileContent) {
-                                                std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
-                                                std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
-                                                if (!fs::exists(storePathWithoutFilename)) {
-                                                    fs::create_directories(storePathWithoutFilename);
-                                                }
-                                                std::string oldStorePathWithFilename = storePathWithFilename;
-                                                for (int i = 0; fs::exists(storePathWithFilename); ++i) {
-                                                    storePathWithFilename = oldStorePathWithFilename;
-                                                    storePathWithFilename += std::to_string(i);
-                                                }
-                                                std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
-                                                ofs << fileContent;
-                                                pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
-                                                attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
-                                                attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
-                                            }
-                                        }
-                                        doc.save_file((prefPath + "data.xml").c_str());
-                                    }
-                                    else if (packetType == PacketType::SendMessageToClass) {
-                                        std::string msNameInputText;
-                                        std::string msTopicInputText;
-                                        std::string msContentInputText;
-                                        packet >> msNameInputText >> msTopicInputText >> msContentInputText;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        int maxId = 0;
-#if 1 // NOTE: Find max id
-                                        {
-                                            auto messageNodes = rootNode.child("messages").children("message");
-                                            for (auto messageNode : messageNodes) {
-                                                int id = messageNode.child("id").text().as_int();
-                                                if (id > maxId) {
-                                                    maxId = id;
-                                                }
-                                            }
-                                        }
-#endif
-                                        pugi::xml_node messageNode = rootNode.child("messages").append_child("message");
-                                        pugi::xml_node idNode = messageNode.append_child("id");
-                                        pugi::xml_node classNameNode = messageNode.append_child("classReceiverName");
-                                        pugi::xml_node topicNode = messageNode.append_child("topic");
-                                        pugi::xml_node contentNode = messageNode.append_child("content");
-                                        pugi::xml_node senderNameNode = messageNode.append_child("senderName");
-                                        pugi::xml_node dateTimeNode = messageNode.append_child("dateTime");
-
-                                        idNode.append_child(pugi::node_pcdata).set_value(std::to_string(maxId + 1).c_str());
-                                        classNameNode.append_child(pugi::node_pcdata).set_value(msNameInputText.c_str());
-                                        topicNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.c_str());
-                                        contentNode.append_child(pugi::node_pcdata).set_value(msContentInputText.c_str());
-                                        senderNameNode.append_child(pugi::node_pcdata).set_value(clients[i].name.c_str());
-                                        dateTimeNode.append_child(pugi::node_pcdata).set_value(currentDateTime().c_str());
-                                        pugi::xml_node attachmentsNode = messageNode.append_child("attachments");
-                                        {
-                                            std::string path, fileContent;
-                                            while (packet >> path >> fileContent) {
-                                                std::string storePathWithoutFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFilename(deleteFirstColon(path));
-                                                std::string storePathWithFilename = prefPath + "Attachments\\" + idNode.text().as_string() + "\\" + deleteFirstColon(path);
-                                                if (!fs::exists(storePathWithoutFilename)) {
-                                                    fs::create_directories(storePathWithoutFilename);
-                                                }
-                                                std::string oldStorePathWithFilename = storePathWithFilename;
-                                                for (int i = 0; fs::exists(storePathWithFilename); ++i) {
-                                                    storePathWithFilename = oldStorePathWithFilename;
-                                                    storePathWithFilename += std::to_string(i);
-                                                }
-                                                std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
-                                                ofs << fileContent;
-                                                pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
-                                                attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
-                                                attachmentNode.append_child("serverPath").append_child(pugi::node_pcdata).set_value(storePathWithFilename.c_str());
-                                            }
-                                        }
-                                        doc.save_file((prefPath + "data.xml").c_str());
-                                    }
-
-                                    else if (packetType == PacketType::MakeCall) {
-                                        std::string callerName, receiverName;
-                                        packet >> callerName >> receiverName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        pugi::xml_node callNode = rootNode.append_child("call");
-                                        pugi::xml_node callerNameNode = callNode.append_child("callerName");
-                                        pugi::xml_node receiverNameNode = callNode.append_child("receiverName");
-                                        pugi::xml_node statusNode = callNode.append_child("status");
-                                        callerNameNode.append_child(pugi::node_pcdata).set_value(callerName.c_str());
-                                        receiverNameNode.append_child(pugi::node_pcdata).set_value(receiverName.c_str());
-                                        statusNode.append_child(pugi::node_pcdata).set_value("pending");
-                                        doc.save_file((prefPath + "data.xml").c_str());
-                                    }
-                                    else if (packetType == PacketType::CheckCalls) {
-                                        std::string receiverName;
-                                        packet >> receiverName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        bool found = false;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (receiverName == callNode.child("receiverName").text().as_string()) {
-                                                answerPacket << PacketType::PendingCall << callNode.child("callerName").text().as_string();
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
-                                            answerPacket << PacketType::NoPendingCall;
-                                        }
-                                        clients[i].socket->send(answerPacket);
-                                    }
-                                    else if (packetType == PacketType::AcceptCall) {
-                                        std::string receiverName;
-                                        packet >> receiverName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("receiverName").text().as_string() == receiverName) {
-                                                callNode.remove_child("status");
-                                                pugi::xml_node statusNode = callNode.append_child("status");
-                                                statusNode.append_child(pugi::node_pcdata).set_value("accepted");
-                                                break;
-                                            }
-                                        }
-                                        doc.save_file((prefPath + "data.xml").c_str());
-                                    }
-                                    else if (packetType == PacketType::IsCallAccepted) {
-                                        std::string callerName;
-                                        packet >> callerName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        bool found = false;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("callerName").text().as_string() == callerName) {
-                                                found = true;
-                                                std::string status = callNode.child("status").text().as_string();
-                                                if (status == "accepted") {
-                                                    answerPacket << PacketType::CallIsAccepted << callNode.child("receiverName").text().as_string();
-                                                }
-                                                else {
-                                                    answerPacket << PacketType::CallIsNotAccepted;
-                                                }
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
-                                            answerPacket << PacketType::CallIsNotAccepted;
-                                        }
-                                        clients[i].socket->send(answerPacket);
-                                    }
-                                    else if (packetType == PacketType::SendCallerAudioData) {
-                                        std::string callerName;
-                                        packet >> callerName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        // TODO: Handle situations where there are more than one call to the same person and things like that (remember to do the same in below if statements)
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("callerName").text().as_string() == callerName) {
-                                                // TODO: Think about infinite number of id's or reuse old ones (data type size)?
-                                                int lastCallerAudioNodeId = 0;
-                                                auto callerAudioNodes = callNode.children("callerAudio");
-                                                for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
-                                                    int id = callerAudioNode.child("id").text().as_int();
-                                                    if (id > lastCallerAudioNodeId) {
-                                                        lastCallerAudioNodeId = id;
-                                                    }
-                                                }
-                                                int id = lastCallerAudioNodeId + 1;
-
-                                                pugi::xml_node callerAudioNode = callNode.append_child("callerAudio");
-
-                                                unsigned sampleRate;
-                                                unsigned channelCount;
-                                                sf::Uint64 sampleCount;
-                                                std::string samplesStr;
-                                                packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
-
-                                                callerAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
-                                                callerAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
-                                                callerAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
-                                                callerAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
-                                                callerAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
-                                                doc.save_file((prefPath + "data.xml").c_str());
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    else if (packetType == PacketType::SendReceiverAudioData) {
-                                        std::string receiverName;
-                                        packet >> receiverName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("receiverName").text().as_string() == receiverName) {
-                                                // TODO: Think about infinite number of id's or reuse old ones (data type size)?
-                                                int lastReceiverAudioNodeId = 0;
-                                                auto callerAudioNodes = callNode.children("receiverAudio");
-                                                for (pugi::xml_node& callerAudioNode : callerAudioNodes) {
-                                                    int id = callerAudioNode.child("id").text().as_int();
-                                                    if (id > lastReceiverAudioNodeId) {
-                                                        lastReceiverAudioNodeId = id;
-                                                    }
-                                                }
-                                                int id = lastReceiverAudioNodeId + 1;
-
-                                                pugi::xml_node receiverAudioNode = callNode.append_child("receiverAudio");
-
-                                                unsigned sampleRate;
-                                                unsigned channelCount;
-                                                sf::Uint64 sampleCount;
-                                                std::string samplesStr;
-                                                packet >> sampleRate >> channelCount >> sampleCount >> samplesStr;
-
-                                                receiverAudioNode.append_child("id").append_child(pugi::node_pcdata).set_value(std::to_string(id).c_str());
-                                                receiverAudioNode.append_child("sampleRate").append_child(pugi::node_pcdata).set_value(std::to_string(sampleRate).c_str());
-                                                receiverAudioNode.append_child("channelCount").append_child(pugi::node_pcdata).set_value(std::to_string(channelCount).c_str());
-                                                receiverAudioNode.append_child("sampleCount").append_child(pugi::node_pcdata).set_value(std::to_string(sampleCount).c_str());
-                                                receiverAudioNode.append_child("samples").append_child(pugi::node_pcdata).set_value(samplesStr.c_str());
-                                                doc.save_file((prefPath + "data.xml").c_str());
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    else if (packetType == PacketType::GetCallerAudioData) {
-                                        std::string callerName;
-                                        packet >> callerName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        // TODO: Is it possible that second user won't support channelCount? If yes what to do about it?
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        bool found = false;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("callerName").text().as_string() == callerName) {
-                                                std::vector<pugi::xml_node> callerAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("callerAudio"));
-                                                if (!callerAudioNodes.empty()) {
-                                                    found = true;
-                                                    pugi::xml_node callerAudioNodeWithMaxId = callerAudioNodes.front();
-                                                    for (int i = 1; i < callerAudioNodes.size(); ++i) {
-                                                        if (callerAudioNodes[i].child("id").text().as_int() > callerAudioNodeWithMaxId.child("id").text().as_int()) {
-                                                            callerAudioNodeWithMaxId = callerAudioNodes[i];
-                                                        }
-                                                    }
-
-                                                    unsigned sampleRate = callerAudioNodeWithMaxId.child("sampleRate").text().as_uint();
-                                                    unsigned channelCount = callerAudioNodeWithMaxId.child("channelCount").text().as_uint();
-                                                    sf::Uint64 sampleCount = callerAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
-                                                    std::string samplesStr = callerAudioNodeWithMaxId.child("samples").text().as_string();
-                                                    answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-                                                    clients[i].socket->send(answerPacket);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if (!found) {
-                                            unsigned sampleRate = 0;
-                                            unsigned channelCount = 0;
-                                            sf::Uint64 sampleCount = 0;
-                                            std::string samplesStr;
-                                            answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-                                            clients[i].socket->send(answerPacket);
-                                        }
-                                    }
-                                    else if (packetType == PacketType::GetReceiverAudioData) {
-                                        std::string receiverName;
-                                        packet >> receiverName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        sf::Packet answerPacket;
-                                        bool found = false;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("receiverName").text().as_string() == receiverName) {
-                                                std::vector<pugi::xml_node> receiverAudioNodes = pugiXmlObjectRangeToStdVector(callNode.children("receiverAudio"));
-                                                if (!receiverAudioNodes.empty()) {
-                                                    found = true;
-                                                    pugi::xml_node receiverAudioNodeWithMaxId = receiverAudioNodes.front();
-                                                    for (int i = 1; i < receiverAudioNodes.size(); ++i) {
-                                                        if (receiverAudioNodes[i].child("id").text().as_int() > receiverAudioNodeWithMaxId.child("id").text().as_int()) {
-                                                            receiverAudioNodeWithMaxId = receiverAudioNodes[i];
-                                                        }
-                                                    }
-
-                                                    unsigned sampleRate = receiverAudioNodeWithMaxId.child("sampleRate").text().as_uint();
-                                                    unsigned channelCount = receiverAudioNodeWithMaxId.child("channelCount").text().as_uint();
-                                                    sf::Uint64 sampleCount = receiverAudioNodeWithMaxId.child("sampleCount").text().as_ullong();
-                                                    std::string samplesStr = receiverAudioNodeWithMaxId.child("samples").text().as_string();
-                                                    answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-                                                    clients[i].socket->send(answerPacket);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if (!found) {
-                                            unsigned sampleRate = 0;
-                                            unsigned channelCount = 0;
-                                            sf::Uint64 sampleCount = 0;
-                                            std::string samplesStr;
-                                            answerPacket << sampleRate << channelCount << sampleCount << samplesStr;
-                                            clients[i].socket->send(answerPacket);
-                                        }
-                                    }
-                                    else if (packetType == PacketType::DisconnectCall) {
-                                        std::string callerName;
-                                        packet >> callerName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("callerName").text().as_string() == callerName) {
-                                                rootNode.remove_child(callNode);
-                                                break;
-                                            }
-                                        }
-                                        doc.save_file((prefPath + "data.xml").c_str());
-                                    }
-                                    else if (packetType == PacketType::DoesCallExits) {
-                                        sf::Packet answerPacket;
-                                        std::string callerName;
-                                        packet >> callerName;
-                                        pugi::xml_document doc;
-                                        doc.load_file((prefPath + "data.xml").c_str());
-                                        pugi::xml_node rootNode = doc.child("root");
-                                        auto callNodes = rootNode.children("call");
-                                        bool found = false;
-                                        for (pugi::xml_node& callNode : callNodes) {
-                                            if (callNode.child("callerName").text().as_string() == callerName) {
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        answerPacket << found;
-                                        clients[i].socket->send(answerPacket);
-                                    }
-                                }
-                                else {
-                                    // TODO: Possibly cheat
-                                }
+                                // TODO: Possibly cheat
                             }
                         }
-                        else if (clients[i].socket->receive(packet) == sf::Socket::Disconnected) {
-                            selector.remove(*clients[i].socket);
-                            clients.erase(clients.begin() + i--);
-                        }
+                    }
+                    else {
+                        /*
+						NOTE:
+							An error may have occured, but sometimes you can just ignore it
+							It may be good to disconnect sock because it is likely invalid now.
+						*/
                     }
                 }
             }
@@ -1650,7 +1374,7 @@ void runServer()
 }
 
 enum CallState {
-    None,
+    Non,
     CallerPending,
     ReceiverPending,
 };
@@ -1666,16 +1390,32 @@ struct MessageList {
     bool isNameSelected = true;
     SDL_FRect pickUpBtnR{};
     Text callerNameText;
-    CallState callState = CallState::None;
+    CallState callState = CallState::Non;
     Text userInfoText;
 };
 
-std::string toStdString(CryptoPP::Integer i)
+std::string getFilename(std::string s)
 {
-    std::stringstream ss;
-    ss << i;
-    return ss.str();
+#ifdef __ANDROID__
+    return s.substr(s.find_last_of("/\\") + 1);
+#else
+    return fs::path(s).filename().string();
+#endif
 }
+
+std::string removeExtension(const std::string& filename)
+{
+    size_t lastdot = filename.find_last_of(".");
+    if (lastdot == std::string::npos)
+        return filename;
+    return filename.substr(0, lastdot);
+}
+
+enum class Scroll {
+    Non,
+    Up,
+    Down,
+};
 
 int main(int argc, char* argv[])
 {
@@ -1901,13 +1641,16 @@ int main(int argc, char* argv[])
 		//return 0;
 	}
 #endif
-    prefPath = SDL_GetPrefPath("Huberti", "Sender");
+    prefPath = SDL_GetPrefPath("Huberti", "Sender"); // NOTE: On android /data/user/0/org.libsdl.app/files/
     std::srand(std::time(0));
     SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
     SDL_LogSetOutputFunction(logOutputCallback, 0);
     SDL_Init(SDL_INIT_EVERYTHING);
     TTF_Init();
+    SDLNet_Init();
+#ifdef _WIN32
     NFD_Init();
+#endif
     SDL_GetMouseState(&mousePos.x, &mousePos.y);
 #ifdef SERVER
     std::thread t([&] {
@@ -1915,8 +1658,9 @@ int main(int argc, char* argv[])
     });
     t.detach();
 #endif
-    sf::TcpSocket socket;
-    socket.connect("192.168.1.10", SERVER_PORT); // TODO: Put it on seperate thread + do something with timeout variable(when it can't connect to remote server) + change Ip address to public one?
+    IPaddress ip;
+    SDLNet_ResolveHost(&ip, "192.168.1.10", SERVER_PORT); // TODO: Change Ip address to public one (domain name)
+    TCPsocket socket = SDLNet_TCP_Open(&ip); // TODO: Error handling
 #if 0
 	{
 		// TODO: Make sure to provide four desirable features of secure communications(confidentiality, integrity, authentication, and non - repudiation).
@@ -2081,7 +1825,7 @@ int main(int argc, char* argv[])
 
 	}
 #endif
-    std::string programName = fs::path(argv[0]).stem().string();
+    std::string programName = removeExtension(getFilename(argv[0]));
 #if 1 && !RELEASE // TODO: Remember to turn it off on reelase
     SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
     SDL_DisplayMode dm;
@@ -2231,12 +1975,12 @@ int main(int argc, char* argv[])
     scrollBtnR.h = 30;
     scrollBtnR.x = scrollR.x;
     scrollBtnR.y = scrollR.y;
-    Scroll scroll = Scroll::None;
+    Scroll scroll = Scroll::Non;
     std::vector<Text> texts;
     Text attachmentsText;
     attachmentsText.setText(renderer, robotoF, u8"Załączniki", { 255, 255, 255 });
     attachmentsText.dstR.w = 70;
-    attachmentsText.dstR.h = 24;
+    attachmentsText.dstR.h = 32;
     attachmentsText.dstR.x = windowWidth / 2 - attachmentsText.dstR.w / 2;
     attachmentsText.dstR.y = contentR.y + contentR.h;
     attachmentsText.autoAdjustW = true;
@@ -2370,7 +2114,7 @@ int main(int argc, char* argv[])
     msAttachmentsScrollBtnR.x = msAttachmentsScrollR.x;
     msAttachmentsScrollBtnR.y = msAttachmentsScrollR.y;
 #endif
-#if 1 // NOTE: Call
+#if 0 // NOTE: Call
     bool isDisconnectedLocally = false;
     bool isDisconnectedRemotely = false;
     bool isCaller = false;
@@ -2437,21 +2181,33 @@ int main(int argc, char* argv[])
                         // TODO: Prevent brute force - connection: (slowdown? timeout? capatche?)
                         // TODO: Checkout possible security leaks in DH and possibly fix them (e.g man-in-the-middle)
                         // TODO: Remember that other file types like images should be unreadable after the encryption
-                        sf::Packet p;
-                        p << PacketType::Login << nameInput.text.text << passwordInput.text.text;
-                        socket.send(p); // TODO: Do something on fail + put it on separate thread?
-                        sf::Packet receivePacket;
-                        socket.receive(receivePacket); // TODO: Do something on fail + put it on separate thread?
-                        PacketType receivePacketType;
-                        receivePacket >> receivePacketType;
-                        if (receivePacketType == PacketType::LoginSuccess) {
-                            state = State::MessageList;
-                            std::string className;
-                            receivePacket >> className;
-                            ml.userInfoText.setText(renderer, robotoF, nameInput.text.text + " " + className, { 255, 255, 255 });
+                        {
+                            pugi::xml_document doc;
+                            pugi::xml_node rootNode = doc.append_child("root");
+                            pugi::xml_node packetTypeNode = rootNode.append_child("packetType");
+                            packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::Login).c_str());
+                            pugi::xml_node nameNode = rootNode.append_child("name");
+                            nameNode.append_child(pugi::node_pcdata).set_value(nameInput.text.text.c_str());
+                            pugi::xml_node passwordNode = rootNode.append_child("password");
+                            passwordNode.append_child(pugi::node_pcdata).set_value(passwordInput.text.text.c_str());
+                            std::stringstream ss;
+                            doc.save(ss);
+                            send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
                         }
-                        else if (receivePacketType == PacketType::LoginFailure) {
-                            infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
+                        {
+                            std::string receiveMsg;
+                            receive(socket, receiveMsg);
+                            pugi::xml_document doc;
+                            doc.load_string(receiveMsg.c_str());
+                            PacketType packetType = (PacketType)doc.child("root").child("packetType").text().as_int();
+                            if (packetType == PacketType::LoginSuccess) {
+                                state = State::MessageList;
+                                std::string className = doc.child("root").child("className").text().as_string();
+                                ml.userInfoText.setText(renderer, robotoF, nameInput.text.text + " " + className, { 255, 255, 255 });
+                            }
+                            else if (packetType == PacketType::LoginFailure) {
+                                infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
+                            }
                         }
                     }
                 }
@@ -2575,7 +2331,7 @@ int main(int argc, char* argv[])
                                                 text.dstR.y -= text.dstR.h;
                                             }
                                         }
-                                        scroll = Scroll::None;
+                                        scroll = Scroll::Non;
                                     }
                                 }
                                 scrollBtnR.y = scrollR.y;
@@ -2701,31 +2457,38 @@ int main(int argc, char* argv[])
                 }
             }
 #endif
-            sf::Packet sentPacket;
-            sentPacket << PacketType::ReceiveMessages;
-            socket.send(sentPacket);
-            sf::Packet receivedPacket;
-            socket.receive(receivedPacket); // TODO: Do something on fail + put it on separate thread?
+            {
+                pugi::xml_document doc;
+                pugi::xml_node rootNode = doc.append_child("root");
+                rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::ReceiveMessages).c_str());
+                std::stringstream ss;
+                doc.save(ss);
+                send(socket, ss.str());
+            }
+            std::string receiveMsg;
+            receive(socket, receiveMsg); // TODO: Do something on fail + put it on separate thread?
+
             std::vector<Message> newMessages;
             newMessages.push_back(Message());
             {
+                pugi::xml_document doc;
+                doc.load_string(receiveMsg.c_str());
+                auto messageNodes = doc.child("root").children("message");
                 int i = 0;
-                while (
-                    receivedPacket
-                    >> newMessages.back().topicText.text
-                    >> newMessages.back().senderNameText.text
-                    >> newMessages.back().contentText.text
-                    >> newMessages.back().dateText.text) {
-                    int attachmentNodesCount = 0;
-                    receivedPacket >> attachmentNodesCount;
-                    for (int i = 0; i < attachmentNodesCount; ++i) {
+                for (auto it = messageNodes.begin(); it != messageNodes.end(); ++it) {
+                    newMessages.back().topicText.text = it->child("topic").text().as_string();
+                    newMessages.back().senderNameText.text = it->child("senderName").text().as_string();
+                    newMessages.back().contentText.text = it->child("content").text().as_string();
+                    newMessages.back().dateText.text = it->child("date").text().as_string();
+                    int attachmentNodesCount = it->child("attachmentNodesCount").text().as_int();
+                    auto attachmentNodes = it->children("attachment");
+                    for (pugi::xml_node& attachmentNode : attachmentNodes) {
                         newMessages.back().attachments.push_back(Attachment());
-                        receivedPacket
-                            >> newMessages.back().attachments.back().path
-                            >> newMessages.back().attachments.back().fileContent;
+                        newMessages.back().attachments.back().path = attachmentNode.child("path").text().as_string();
+                        newMessages.back().attachments.back().fileContent = attachmentNode.child("fileContent").text().as_string();
                         newMessages.back().attachments.back().text.autoAdjustW = true;
                         newMessages.back().attachments.back().text.wMultiplier = 0.2;
-                        newMessages.back().attachments.back().text.setText(renderer, robotoF, fs::path(newMessages.back().attachments.back().path).filename().string(), { 255, 255, 255 });
+                        newMessages.back().attachments.back().text.setText(renderer, robotoF, getFilename(newMessages.back().attachments.back().path), { 255, 255, 255 });
                         newMessages.back().attachments.back().text.dstR.h = 20;
                         newMessages.back().attachments.back().text.dstR.x = 0;
                         if (newMessages.back().attachments.size() == 1) {
@@ -2883,10 +2646,10 @@ int main(int argc, char* argv[])
                                 CoTaskMemFree(static_cast<void*>(p));
                             }
                             {
-                                std::string filename = fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string();
+                                std::string filename = getFilename(ml.messages[messageIndexToShow].attachments[i].path);
                                 std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
                                 bool shouldSave = true;
-                                if (fs::exists(finalPath)) {
+                                if (exists(finalPath)) {
                                     SDL_SysWMinfo wmInfo;
                                     SDL_VERSION(&wmInfo.version);
                                     SDL_GetWindowWMInfo(window, &wmInfo);
@@ -2901,7 +2664,7 @@ int main(int argc, char* argv[])
                                     }
                                 }
                                 if (shouldSave) {
-                                    std::ofstream ofs(finalPath, std::ofstream::out | std::ofstream::binary);
+                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out | std::ofstream::binary);
                                     ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
                                     ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
                                 }
@@ -2920,10 +2683,10 @@ int main(int argc, char* argv[])
                         }
                         {
                             for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                                std::string filename = fs::path(ml.messages[messageIndexToShow].attachments[i].path).filename().string();
+                                std::string filename = getFilename(ml.messages[messageIndexToShow].attachments[i].path);
                                 std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
                                 bool shouldSave = true;
-                                if (fs::exists(finalPath)) {
+                                if (exists(finalPath)) {
                                     SDL_SysWMinfo wmInfo;
                                     SDL_VERSION(&wmInfo.version);
                                     SDL_GetWindowWMInfo(window, &wmInfo);
@@ -2938,7 +2701,7 @@ int main(int argc, char* argv[])
                                     }
                                 }
                                 if (shouldSave) {
-                                    std::ofstream ofs(finalPath, std::ofstream::out | std::ofstream::binary);
+                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out | std::ofstream::binary);
                                     ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
                                 }
                             }
@@ -3042,7 +2805,7 @@ int main(int argc, char* argv[])
                         scrollBtnR.y += (percent * (max - min) / 100) + min;
                     }
                 }
-                scroll = Scroll::None;
+                scroll = Scroll::Non;
                 for (Text& text : texts) {
                     if (text.dstR.y >= contentR.y && text.dstR.y + text.dstR.h <= contentR.y + contentR.h) {
                         text.draw(renderer);
@@ -3150,7 +2913,7 @@ int main(int argc, char* argv[])
                                         msAttachments.back().path = converter.to_bytes(outPathStr);
                                         msAttachments.back().text.autoAdjustW = true;
                                         msAttachments.back().text.wMultiplier = 0.2;
-                                        msAttachments.back().text.setText(renderer, robotoF, fs::path(msAttachments.back().path).filename().string(), { TEXT_COLOR });
+                                        msAttachments.back().text.setText(renderer, robotoF, getFilename(msAttachments.back().path), { TEXT_COLOR });
                                         msAttachments.back().text.dstR.h = 20;
                                         msAttachments.back().text.dstR.x = 0;
                                         if (msAttachments.size() == 1) {
