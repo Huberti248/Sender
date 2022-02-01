@@ -58,7 +58,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>SFML_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>vendor\SDL\include;vendor\SDL_image\include;vendor\SDL_ttf\include;vendor\SDL_mixer\include;vendor\SDL_net\include;vendor\SDL_gpu\include;vendor\GLEW\include;vendor\GLM\include;vendor\SFML\include;vendor\PUGIXML\src;vendor\CURL\include;vendor\GTK\include;vendor\GTK\include\atk-1.0;vendor\GTK\include\cairo;vendor\GTK\include\epoxy;vendor\GTK\include\fontconfig;vendor\GTK\include\freetype2;vendor\GTK\include\fribidi;vendor\GTK\include\gail-3.0;vendor\GTK\include\gdk-pixbuf-2.0;vendor\GTK\include\gio-win32-2.0;vendor\GTK\include\glib-2.0;vendor\GTK\include\gtk-3.0;vendor\GTK\include\harfbuzz;vendor\GTK\include\jasper;vendor\GTK\include\libpkgconf;vendor\GTK\include\libpng16;vendor\GTK\include\libxml2;vendor\GTK\include\pango-1.0;vendor\GTK\include\pixman-1;vendor\GTK\lib\glib-2.0\include;vendor\NATIVEFILEDIALOGEXTENDED\src\include;vendor\CRYPTOPP840;vendor\BOOST;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>vendor\SDL\include;vendor\SDL_image\include;vendor\SDL_ttf\include;vendor\SDL_mixer\include;vendor\SDL_net\include;vendor\SDL_gpu\include;vendor\GLEW\include;vendor\GLM\include;vendor\SFML\include;vendor\PUGIXML\src;vendor\CURL\include;vendor\GTK\include;vendor\GTK\include\atk-1.0;vendor\GTK\include\cairo;vendor\GTK\include\epoxy;vendor\GTK\include\fontconfig;vendor\GTK\include\freetype2;vendor\GTK\include\fribidi;vendor\GTK\include\gail-3.0;vendor\GTK\include\gdk-pixbuf-2.0;vendor\GTK\include\gio-win32-2.0;vendor\GTK\include\glib-2.0;vendor\GTK\include\gtk-3.0;vendor\GTK\include\harfbuzz;vendor\GTK\include\jasper;vendor\GTK\include\libpkgconf;vendor\GTK\include\libpng16;vendor\GTK\include\libxml2;vendor\GTK\include\pango-1.0;vendor\GTK\include\pixman-1;vendor\GTK\lib\glib-2.0\include;vendor\NATIVEFILEDIALOGEXTENDED\src\include;vendor\CRYPTOPP840;vendor\BOOST;vendor\IMGUI;vendor\IMGUI\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -76,7 +76,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <PreprocessorDefinitions>SFML_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>vendor\SDL\include;vendor\SDL_image\include;vendor\SDL_ttf\include;vendor\SDL_mixer\include;vendor\SDL_net\include;vendor\SDL_gpu\include;vendor\GLEW\include;vendor\GLM\include;vendor\SFML\include;vendor\PUGIXML\src;vendor\CURL\include;vendor\GTK\include;vendor\GTK\include\atk-1.0;vendor\GTK\include\cairo;vendor\GTK\include\epoxy;vendor\GTK\include\fontconfig;vendor\GTK\include\freetype2;vendor\GTK\include\fribidi;vendor\GTK\include\gail-3.0;vendor\GTK\include\gdk-pixbuf-2.0;vendor\GTK\include\gio-win32-2.0;vendor\GTK\include\glib-2.0;vendor\GTK\include\gtk-3.0;vendor\GTK\include\harfbuzz;vendor\GTK\include\jasper;vendor\GTK\include\libpkgconf;vendor\GTK\include\libpng16;vendor\GTK\include\libxml2;vendor\GTK\include\pango-1.0;vendor\GTK\include\pixman-1;vendor\GTK\lib\glib-2.0\include;vendor\NATIVEFILEDIALOGEXTENDED\src\include;vendor\CRYPTOPP840;vendor\BOOST;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>vendor\SDL\include;vendor\SDL_image\include;vendor\SDL_ttf\include;vendor\SDL_mixer\include;vendor\SDL_net\include;vendor\SDL_gpu\include;vendor\GLEW\include;vendor\GLM\include;vendor\SFML\include;vendor\PUGIXML\src;vendor\CURL\include;vendor\GTK\include;vendor\GTK\include\atk-1.0;vendor\GTK\include\cairo;vendor\GTK\include\epoxy;vendor\GTK\include\fontconfig;vendor\GTK\include\freetype2;vendor\GTK\include\fribidi;vendor\GTK\include\gail-3.0;vendor\GTK\include\gdk-pixbuf-2.0;vendor\GTK\include\gio-win32-2.0;vendor\GTK\include\glib-2.0;vendor\GTK\include\gtk-3.0;vendor\GTK\include\harfbuzz;vendor\GTK\include\jasper;vendor\GTK\include\libpkgconf;vendor\GTK\include\libpng16;vendor\GTK\include\libxml2;vendor\GTK\include\pango-1.0;vendor\GTK\include\pixman-1;vendor\GTK\lib\glib-2.0\include;vendor\NATIVEFILEDIALOGEXTENDED\src\include;vendor\CRYPTOPP840;vendor\BOOST;vendor\IMGUI;vendor\IMGUI\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -95,6 +95,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="vendor\IMGUI\backends\imgui_impl_sdl.cpp" />
+    <ClCompile Include="vendor\IMGUI\backends\imgui_impl_sdlrenderer.cpp" />
+    <ClCompile Include="vendor\IMGUI\imgui.cpp" />
+    <ClCompile Include="vendor\IMGUI\imgui_demo.cpp" />
+    <ClCompile Include="vendor\IMGUI\imgui_draw.cpp" />
+    <ClCompile Include="vendor\IMGUI\imgui_tables.cpp" />
+    <ClCompile Include="vendor\IMGUI\imgui_widgets.cpp" />
+    <ClCompile Include="vendor\IMGUI\misc\cpp\imgui_stdlib.cpp" />
     <ClCompile Include="vendor\PUGIXML\src\pugixml.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

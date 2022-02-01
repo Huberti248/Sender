@@ -11,6 +11,8 @@ TODO:
 - Checkout have many clients could be connected to the server at the same time + handle situation when server is full
 - Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
+- Replace own inputs with imgui ones
+- Think what will happen when user exceeds e.g. character limit (more characters than there could be in int data type)
 */
 #ifdef __linux__
 #include <SDL2/SDL.h>
@@ -76,6 +78,10 @@ TODO:
 #include <sys/types.h>
 #include <thread>
 #include <vector>
+#include <imgui.h>
+#include <imgui_impl_sdl.h>
+#include <imgui_impl_sdlrenderer.h>
+#include <misc/cpp/imgui_stdlib.h>
 #include "vendor/PUGIXML/src/pugixml.hpp"
 #ifdef __ANDROID__
 #include <android/log.h> //__android_log_print(ANDROID_LOG_VERBOSE, "Sender", "Example number log: %d", number);
@@ -1032,7 +1038,7 @@ int receive(TCPsocket socket, std::string& msg)
     return result;
 }
 
-void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, TextEditInput& msContentTextEditInput, Text& nameInputText,
+void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, TextEditInput& msContentTextEditInput,
     Input& msTopicInput, Input& msNameInput, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
     pugi::xml_document doc;
@@ -1416,6 +1422,56 @@ enum class Scroll {
     Up,
     Down,
 };
+
+void sendLoginAndPasswordToServer(std::string login, std::string password, TTF_Font* robotoF, TCPsocket socket, State& state, Text& infoText, MessageList& ml)
+{
+
+    /*
+						TODO:
+							(DONE)
+
+							Someone might modify program behaviour and get into later states. Protect againts that.
+							Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
+
+							One way to fix it might be to add user name to struct Client on server side + add bool isLoggedIn + check both before sending all user messages from db to client on
+							PacketType::ReceiveMessages (then there is no need to send user name from user to the server anymore I guess - it might be got from clients[i].[...])
+						*/
+
+    // TODO: Encrypt the data on the client and decrypt it on the server
+    // TODO: Add Crypto++ library to preamke + learn how to use AES
+    // TODO: Make sure that it will be safe (no one would be able to steal login and password)
+    // TODO: Prevent brute force - connection: (slowdown? timeout? capatche?)
+    // TODO: Checkout possible security leaks in DH and possibly fix them (e.g man-in-the-middle)
+    // TODO: Remember that other file types like images should be unreadable after the encryption
+    {
+        pugi::xml_document doc;
+        pugi::xml_node rootNode = doc.append_child("root");
+        pugi::xml_node packetTypeNode = rootNode.append_child("packetType");
+        packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::Login).c_str());
+        pugi::xml_node nameNode = rootNode.append_child("name");
+        nameNode.append_child(pugi::node_pcdata).set_value(login.c_str());
+        pugi::xml_node passwordNode = rootNode.append_child("password");
+        passwordNode.append_child(pugi::node_pcdata).set_value(password.c_str());
+        std::stringstream ss;
+        doc.save(ss);
+        send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
+    }
+    {
+        std::string receiveMsg;
+        receive(socket, receiveMsg);
+        pugi::xml_document doc;
+        doc.load_string(receiveMsg.c_str());
+        PacketType packetType = (PacketType)doc.child("root").child("packetType").text().as_int();
+        if (packetType == PacketType::LoginSuccess) {
+            state = State::MessageList;
+            std::string className = doc.child("root").child("className").text().as_string();
+            ml.userInfoText.setText(renderer, robotoF, login + " " + className, { 255, 255, 255 });
+        }
+        else if (packetType == PacketType::LoginFailure) {
+            infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
+        }
+    }
+}
 
 int main(int argc, char* argv[])
 {
@@ -1848,56 +1904,14 @@ int main(int argc, char* argv[])
     bool running = true;
     State state = State::LoginAndRegister;
 #if 1 // NOTE: LoginAndRegister
-    Input nameInput;
-    nameInput.r.w = 200;
-    nameInput.r.h = 30;
-    nameInput.r.x = windowWidth / 2 - nameInput.r.w / 2;
-    nameInput.r.y = windowHeight / 2.f - nameInput.r.h - 10;
-    nameInput.text.dstR.w = nameInput.r.w;
-    nameInput.text.dstR.h = nameInput.r.h;
-    nameInput.text.dstR.x = nameInput.r.x;
-    nameInput.text.dstR.y = nameInput.r.y;
-    nameInput.text.autoAdjustW = true;
-    nameInput.text.wMultiplier = 0.5;
-    nameInput.cursorR.w = 8;
-    nameInput.cursorR.h = nameInput.r.h - 2;
-    nameInput.cursorR.x = nameInput.r.x;
-    nameInput.cursorR.y = nameInput.r.y + nameInput.r.h / 2 - nameInput.cursorR.h / 2;
-    nameInput.isSelected = true;
-    Text nameText;
-    nameText.setText(renderer, robotoF, u8"Nazwa");
-    nameText.dstR.w = 60;
-    nameText.dstR.h = 20;
-    nameText.dstR.x = windowWidth / 2 - nameText.dstR.w / 2;
-    nameText.dstR.y = nameInput.r.y - nameText.dstR.h;
-    Text passwordText;
-    passwordText.setText(renderer, robotoF, u8"Hasło");
-    passwordText.dstR.w = 60;
-    passwordText.dstR.h = 20;
-    passwordText.dstR.x = windowWidth / 2 - passwordText.dstR.w / 2;
-    passwordText.dstR.y = windowHeight / 2.f + 10;
-    Input passwordInput;
-    passwordInput.r.w = 200;
-    passwordInput.r.h = 30;
-    passwordInput.r.x = windowWidth / 2 - passwordInput.r.w / 2;
-    passwordInput.r.y = passwordText.dstR.y + passwordText.dstR.h;
-    passwordInput.text.dstR.w = passwordInput.r.w;
-    passwordInput.text.dstR.h = passwordInput.r.h;
-    passwordInput.text.dstR.x = passwordInput.r.x;
-    passwordInput.text.dstR.y = passwordInput.r.y;
-    passwordInput.text.autoAdjustW = true;
-    passwordInput.text.wMultiplier = 0.5;
-    passwordInput.cursorR.w = 8;
-    passwordInput.cursorR.h = passwordInput.r.h - 2;
-    passwordInput.cursorR.x = passwordInput.r.x;
-    passwordInput.cursorR.y = passwordInput.r.y + passwordInput.r.h / 2 - passwordInput.cursorR.h / 2;
-    passwordInput.isPassword = true;
     Text infoText;
     infoText.setText(renderer, robotoF, "");
     infoText.dstR.w = 300;
     infoText.dstR.h = 20;
     infoText.dstR.x = 15;
     infoText.dstR.y = windowHeight - infoText.dstR.h - 15;
+    std::string login;
+    std::string password;
 #endif
 #if 1 // NOTE: MessageList
     MessageList ml;
@@ -2134,16 +2148,26 @@ int main(int argc, char* argv[])
     disconnectBtnR.y = windowHeight - disconnectBtnR.h;
 #endif
     int messageIndexToShow = -1;
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    (void)io;
+    ImGui::StyleColorsDark();
+    ImGui_ImplSDL2_InitForSDLRenderer(window);
+    ImGui_ImplSDLRenderer_Init(renderer);
+    ImVector<ImWchar> ranges;
+    ImFontGlyphRangesBuilder builder;
+    builder.AddText(u8"Zażółć gęślą jaźń");
+    builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+    builder.BuildRanges(&ranges);
+    io.Fonts->AddFontFromFileTTF("res/roboto.ttf", 16.0f, 0, ranges.Data);
+    io.Fonts->Build();
+    bool showDemoWindow = true;
     while (running) {
         if (state == State::LoginAndRegister) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
-                if (nameInput.isSelected) {
-                    nameInput.handleEvent(event, robotoF);
-                }
-                else {
-                    passwordInput.handleEvent(event, robotoF);
-                }
+                ImGui_ImplSDL2_ProcessEvent(&event);
                 if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
                     running = false;
                     // TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -2153,62 +2177,8 @@ int main(int argc, char* argv[])
                 }
                 if (event.type == SDL_KEYDOWN) {
                     keys[event.key.keysym.scancode] = true;
-                    if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
-                        if (nameInput.isSelected) {
-                            nameInput.isSelected = false;
-                            passwordInput.isSelected = true;
-                        }
-                        else {
-                            nameInput.isSelected = true;
-                            passwordInput.isSelected = false;
-                        }
-                    }
                     if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-                        /*
-						TODO:
-							(DONE)
-
-							Someone might modify program behaviour and get into later states. Protect againts that.
-							Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
-
-							One way to fix it might be to add user name to struct Client on server side + add bool isLoggedIn + check both before sending all user messages from db to client on
-							PacketType::ReceiveMessages (then there is no need to send user name from user to the server anymore I guess - it might be got from clients[i].[...])
-						*/
-
-                        // TODO: Encrypt the data on the client and decrypt it on the server
-                        // TODO: Add Crypto++ library to preamke + learn how to use AES
-                        // TODO: Make sure that it will be safe (no one would be able to steal login and password)
-                        // TODO: Prevent brute force - connection: (slowdown? timeout? capatche?)
-                        // TODO: Checkout possible security leaks in DH and possibly fix them (e.g man-in-the-middle)
-                        // TODO: Remember that other file types like images should be unreadable after the encryption
-                        {
-                            pugi::xml_document doc;
-                            pugi::xml_node rootNode = doc.append_child("root");
-                            pugi::xml_node packetTypeNode = rootNode.append_child("packetType");
-                            packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::Login).c_str());
-                            pugi::xml_node nameNode = rootNode.append_child("name");
-                            nameNode.append_child(pugi::node_pcdata).set_value(nameInput.text.text.c_str());
-                            pugi::xml_node passwordNode = rootNode.append_child("password");
-                            passwordNode.append_child(pugi::node_pcdata).set_value(passwordInput.text.text.c_str());
-                            std::stringstream ss;
-                            doc.save(ss);
-                            send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
-                        }
-                        {
-                            std::string receiveMsg;
-                            receive(socket, receiveMsg);
-                            pugi::xml_document doc;
-                            doc.load_string(receiveMsg.c_str());
-                            PacketType packetType = (PacketType)doc.child("root").child("packetType").text().as_int();
-                            if (packetType == PacketType::LoginSuccess) {
-                                state = State::MessageList;
-                                std::string className = doc.child("root").child("className").text().as_string();
-                                ml.userInfoText.setText(renderer, robotoF, nameInput.text.text + " " + className, { 255, 255, 255 });
-                            }
-                            else if (packetType == PacketType::LoginFailure) {
-                                infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
-                            }
-                        }
+                        sendLoginAndPasswordToServer(login, password, robotoF, socket, state, infoText, ml);
                     }
                 }
                 if (event.type == SDL_KEYUP) {
@@ -2216,14 +2186,6 @@ int main(int argc, char* argv[])
                 }
                 if (event.type == SDL_MOUSEBUTTONDOWN) {
                     buttons[event.button.button] = true;
-                    if (SDL_PointInRect(&mousePos, &nameInput.r)) {
-                        nameInput.isSelected = true;
-                        passwordInput.isSelected = false;
-                    }
-                    else if (SDL_PointInRect(&mousePos, &passwordInput.r)) {
-                        nameInput.isSelected = false;
-                        passwordInput.isSelected = true;
-                    }
                 }
                 if (event.type == SDL_MOUSEBUTTONUP) {
                     buttons[event.button.button] = false;
@@ -2237,24 +2199,34 @@ int main(int argc, char* argv[])
                     realMousePos.y = event.motion.y;
                 }
             }
+            ImGui_ImplSDLRenderer_NewFrame();
+            ImGui_ImplSDL2_NewFrame(window);
+            io.MousePos.x = mousePos.x;
+            io.MousePos.y = mousePos.y;
+            ImGui::NewFrame();
+            if (showDemoWindow) {
+                ImGui::ShowDemoWindow(&showDemoWindow);
+            }
+            {
+                ImGui::Begin("Login", 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
+                ImGui::SetWindowPos("Login", { windowWidth / 2.f - ImGui::GetWindowSize().x / 2, windowHeight / 2.f - ImGui::GetWindowSize().y / 2 });
+                ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 400) * 0.5f);
+                ImGui::SetCursorPosY((ImGui::GetWindowSize().y) * 0.5f);
+                ImGui::InputTextWithHint("Nazwa", "Nazwa", &login);
+                ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 400) * 0.5f);
+                ImGui::InputTextWithHint(u8"Hasło", u8"Hasło", &password, ImGuiInputTextFlags_Password); // TODO: Report a bug or fix it that when you move cursor using left arrow cursor somethimes disappears
+                ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 100) * 0.5f);
+                if (ImGui::Button("Login", { 200, 50 })) {
+                    sendLoginAndPasswordToServer(login, password, robotoF, socket, state, infoText, ml);
+                }
+                ImGui::End();
+            }
+            ImGui::Render();
             SDL_SetRenderDrawColor(renderer, BG_COLOR);
             SDL_RenderClear(renderer);
-            nameInput.draw(renderer, robotoF);
-            if (nameInput.isSelected) {
-                SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-                SDL_RenderDrawRect(renderer, &nameInput.r);
-            }
-            nameText.draw(renderer);
-
-            passwordInput.draw(renderer, robotoF);
-            if (passwordInput.isSelected) {
-                SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-                SDL_RenderDrawRect(renderer, &passwordInput.r);
-            }
-            passwordText.draw(renderer);
-
+            ImGui_ImplSDLRenderer_RenderDrawData(ImGui::GetDrawData());
+            SDL_RenderSetViewport(renderer, 0);
             infoText.draw(renderer);
-
             SDL_RenderPresent(renderer);
         }
         else if (state == State::MessageList) {
@@ -2891,7 +2863,7 @@ int main(int argc, char* argv[])
                         }
                     }
                     if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-                        sendMessage(socket, msNameText, msNameInput.text, msTopicInput.text, msContentTextEditInput, nameInput.text, msTopicInput, msNameInput, renderer, robotoF, msAttachments);
+                        sendMessage(socket, msNameText, msNameInput.text, msTopicInput.text, msContentTextEditInput, msTopicInput, msNameInput, renderer, robotoF, msAttachments);
                     }
                     if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
                         const nfdpathset_t* outPaths;

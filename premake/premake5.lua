@@ -65,6 +65,8 @@ project "Sender"
 		"../vendor/NATIVEFILEDIALOGEXTENDED/src/include",
 		"../vendor/CRYPTOPP840",
         "../vendor/BOOST",
+		"../vendor/IMGUI",
+        "../vendor/IMGUI/backends",
     }
    
     libdirs{
@@ -159,6 +161,14 @@ project "Sender"
 	files{
 		"../main.cpp",
 		"../vendor/PUGIXML/src/pugixml.cpp",
+		"../vendor/IMGUI/imgui.cpp",
+		"../vendor/IMGUI/imgui_demo.cpp",
+		"../vendor/IMGUI/imgui_draw.cpp",
+		"../vendor/IMGUI/imgui_tables.cpp",
+		"../vendor/IMGUI/imgui_widgets.cpp",
+		"../vendor/IMGUI/backends/imgui_impl_sdl.cpp",
+		"../vendor/IMGUI/backends/imgui_impl_sdlrenderer.cpp",
+		"../vendor/IMGUI/misc/cpp/imgui_stdlib.cpp",
 	}
 
 	defines "SFML_STATIC"
