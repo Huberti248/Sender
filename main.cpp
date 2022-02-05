@@ -1038,8 +1038,7 @@ int receive(TCPsocket socket, std::string& msg)
     return result;
 }
 
-void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text& msTopicInputText, TextEditInput& msContentTextEditInput,
-    Input& msTopicInput, Input& msNameInput, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
+void sendMessage(TCPsocket socket, Text msNameText, std::string& msReceiver, std::string& msTopic, std::string& msMessage, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
 {
     pugi::xml_document doc;
     pugi::xml_node rootNode = doc.append_child("root");
@@ -1050,11 +1049,11 @@ void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text&
         rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::SendMessage).c_str());
     }
     pugi::xml_node msNameInputNode = rootNode.append_child("msNameInput");
-    msNameInputNode.append_child(pugi::node_pcdata).set_value(msNameInputText.text.c_str());
+    msNameInputNode.append_child(pugi::node_pcdata).set_value(msReceiver.c_str());
     pugi::xml_node msTopicInputNode = rootNode.append_child("msTopicInput");
-    msTopicInputNode.append_child(pugi::node_pcdata).set_value(msTopicInputText.text.c_str());
+    msTopicInputNode.append_child(pugi::node_pcdata).set_value(msTopic.c_str());
     pugi::xml_node msContentInputNode = rootNode.append_child("msContentInput");
-    msContentInputNode.append_child(pugi::node_pcdata).set_value(msContentTextEditInput.getText().c_str());
+    msContentInputNode.append_child(pugi::node_pcdata).set_value(msMessage.c_str());
     for (int i = 0; i < attachments.size(); ++i) {
         pugi::xml_node attachmentNode = rootNode.append_child("attachment");
         pugi::xml_node pathNode = attachmentNode.append_child("path");
@@ -1065,12 +1064,9 @@ void sendMessage(TCPsocket socket, Text msNameText, Text& msNameInputText, Text&
     std::stringstream ss;
     doc.save(ss);
     send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
-    msNameInputText.setText(renderer, font, "");
-    msTopicInputText.setText(renderer, font, "");
-    msContentTextEditInput.clear(renderer, font);
-    msNameInput.isSelected = false;
-    msTopicInput.isSelected = true;
-    msContentTextEditInput.isSelected = false;
+    msReceiver.clear();
+    msTopic.clear();
+    msMessage.clear();
     attachments.clear();
 }
 
@@ -1471,6 +1467,15 @@ void sendLoginAndPasswordToServer(std::string login, std::string password, TTF_F
             infoText.setText(renderer, robotoF, u8"Nieprawidłowe dane logowania. Spróbuj ponownie.");
         }
     }
+}
+
+void textCentered(std::string text)
+{
+    auto windowWidth = ImGui::GetWindowSize().x;
+    auto textWidth = ImGui::CalcTextSize(text.c_str()).x;
+
+    ImGui::SetCursorPosX((windowWidth - textWidth) * 0.5f);
+    ImGui::Text(text.c_str());
 }
 
 int main(int argc, char* argv[])
@@ -2039,48 +2044,17 @@ int main(int argc, char* argv[])
     msSwapBtnR.h = closeBtnR.h;
     msSwapBtnR.x = closeBtnR.x + closeBtnR.w;
     msSwapBtnR.y = closeBtnR.y;
-    Input msNameInput;
-    msNameInput.r.w = getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50);
-    msNameInput.r.h = getValueFromValueAndPercent(closeBtnR.h, 70);
-    msNameInput.r.x = msSwapBtnR.x + msSwapBtnR.w;
-    msNameInput.r.y = 0;
     Text msNameText;
     msNameText.setText(renderer, robotoF, u8"Nazwa", { TEXT_COLOR });
     msNameText.dstR.w = 60;
     msNameText.dstR.h = 20;
-    msNameText.dstR.x = msNameInput.r.x + msNameInput.r.w / 2 - msNameText.dstR.w / 2;
+    msNameText.dstR.x = msSwapBtnR.x + msSwapBtnR.w + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) / 2 - msNameText.dstR.w / 2;
     msNameText.dstR.y = 0;
-    msNameInput.r.y = msNameText.dstR.y + msNameText.dstR.h;
-    msNameInput.text.dstR.w = msNameInput.r.w;
-    msNameInput.text.dstR.h = msNameInput.r.h;
-    msNameInput.text.dstR.x = msNameInput.r.x;
-    msNameInput.text.dstR.y = msNameInput.r.y;
-    msNameInput.text.autoAdjustW = true;
-    msNameInput.text.wMultiplier = 0.6;
-    msNameInput.cursorR.w = 8;
-    msNameInput.cursorR.h = msNameInput.r.h - 2;
-    msNameInput.cursorR.x = msNameInput.r.x;
-    msNameInput.cursorR.y = msNameInput.r.y + msNameInput.r.h / 2 - msNameInput.cursorR.h / 2;
-    msNameInput.isSelected = true;
-    Input msTopicInput;
-    msTopicInput.r = msNameInput.r;
-    msTopicInput.r.x = msNameInput.r.x + msNameInput.r.w;
-    msTopicInput.text.dstR.w = msTopicInput.r.w;
-    msTopicInput.text.dstR.h = msTopicInput.r.h;
-    msTopicInput.text.dstR.x = msTopicInput.r.x;
-    msTopicInput.text.dstR.y = msTopicInput.r.y;
-    msTopicInput.text.autoAdjustW = true;
-    msTopicInput.text.wMultiplier = 0.6;
-    msTopicInput.cursorR.w = 8;
-    msTopicInput.cursorR.h = msTopicInput.r.h - 2;
-    msTopicInput.cursorR.x = msTopicInput.r.x;
-    msTopicInput.cursorR.y = msTopicInput.r.y + msTopicInput.r.h / 2 - msTopicInput.cursorR.h / 2;
-    msTopicInput.isSelected = false;
     Text msTopicText;
     msTopicText.setText(renderer, robotoF, "Temat", { TEXT_COLOR });
     msTopicText.dstR.w = 60;
     msTopicText.dstR.h = 20;
-    msTopicText.dstR.x = msTopicInput.r.x + msTopicInput.r.w / 2 - msTopicText.dstR.w / 2;
+    msTopicText.dstR.x = msSwapBtnR.x + msSwapBtnR.w + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) / 2 - msTopicText.dstR.w / 2;
     msTopicText.dstR.y = msNameText.dstR.y;
     msTopicText.autoAdjustW = true;
     Text msContentText;
@@ -2089,27 +2063,12 @@ int main(int argc, char* argv[])
     msContentText.dstR.h = 20;
     msContentText.dstR.x = windowWidth / 2 - msContentText.dstR.w / 2;
     msContentText.dstR.y = closeBtnR.y + closeBtnR.h;
-    TextEditInput msContentTextEditInput;
-    msContentTextEditInput.r.w = windowWidth;
-    msContentTextEditInput.r.h = windowHeight - closeBtnR.h - msSendBtnR.h - 260;
-    msContentTextEditInput.r.x = 0;
-    msContentTextEditInput.r.y = msContentText.dstR.y + msContentText.dstR.h;
-    msContentTextEditInput.texts.push_back(Text());
-    msContentTextEditInput.texts.back().dstR.h = 24;
-    msContentTextEditInput.texts.back().dstR.x = msContentTextEditInput.r.x;
-    msContentTextEditInput.texts.back().dstR.y = msContentTextEditInput.r.y;
-    msContentTextEditInput.texts.back().autoAdjustW = true;
-    msContentTextEditInput.texts.back().wMultiplier = 0.3;
-    msContentTextEditInput.cursorR.w = 8;
-    msContentTextEditInput.cursorR.h = msContentTextEditInput.texts.back().dstR.h - 2;
-    msContentTextEditInput.cursorR.x = msContentTextEditInput.texts.back().dstR.x;
-    msContentTextEditInput.cursorR.y = msContentTextEditInput.texts.back().dstR.y + msContentTextEditInput.texts.back().dstR.h / 2 - msContentTextEditInput.cursorR.h / 2;
     Text msAttachmentsText;
     msAttachmentsText.setText(renderer, robotoF, u8"Załączniki", { TEXT_COLOR });
     msAttachmentsText.dstR.w = 70;
     msAttachmentsText.dstR.h = 20;
     msAttachmentsText.dstR.x = windowWidth / 2 - msAttachmentsText.dstR.w / 2;
-    msAttachmentsText.dstR.y = msContentTextEditInput.r.y + msContentTextEditInput.r.h;
+    msAttachmentsText.dstR.y = msContentText.dstR.y + msContentText.dstR.h + windowHeight - closeBtnR.h - msSendBtnR.h - 260;
     msAttachmentsText.autoAdjustW = true;
     std::vector<Attachment> msAttachments;
     SDL_FRect msAttachmentR;
@@ -2127,6 +2086,10 @@ int main(int argc, char* argv[])
     msAttachmentsScrollBtnR.h = 30;
     msAttachmentsScrollBtnR.x = msAttachmentsScrollR.x;
     msAttachmentsScrollBtnR.y = msAttachmentsScrollR.y;
+    std::string msReceiver;
+    std::string msTopic;
+    std::string msMessage;
+    bool shouldUseFirstWidgets = true;
 #endif
 #if 0 // NOTE: Call
     bool isDisconnectedLocally = false;
@@ -2212,9 +2175,9 @@ int main(int argc, char* argv[])
                 ImGui::SetWindowPos("Login", { windowWidth / 2.f - ImGui::GetWindowSize().x / 2, windowHeight / 2.f - ImGui::GetWindowSize().y / 2 });
                 ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 400) * 0.5f);
                 ImGui::SetCursorPosY((ImGui::GetWindowSize().y) * 0.5f);
-                ImGui::InputTextWithHint("Nazwa", "Nazwa", &login);
+                ImGui::InputTextWithHint("##Nazwa", "Nazwa", &login);
                 ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 400) * 0.5f);
-                ImGui::InputTextWithHint(u8"Hasło", u8"Hasło", &password, ImGuiInputTextFlags_Password); // TODO: Report a bug or fix it that when you move cursor using left arrow cursor somethimes disappears
+                ImGui::InputTextWithHint(u8"##Hasło", u8"Hasło", &password, ImGuiInputTextFlags_Password); // TODO: Report a bug or fix it that when you move cursor using left arrow cursor somethimes disappears
                 ImGui::SetCursorPosX((ImGui::GetWindowSize().x - 100) * 0.5f);
                 if (ImGui::Button("Login", { 200, 50 })) {
                     sendLoginAndPasswordToServer(login, password, robotoF, socket, state, infoText, ml);
@@ -2232,6 +2195,7 @@ int main(int argc, char* argv[])
         else if (state == State::MessageList) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
                 if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
                     running = false;
                     // TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -2580,6 +2544,7 @@ int main(int argc, char* argv[])
         else if (state == State::MessageContent) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
                 if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
                     running = false;
                     // TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -2811,16 +2776,7 @@ int main(int argc, char* argv[])
         else if (state == State::MessageSend) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
-                if (msNameInput.isSelected) {
-                    msNameInput.handleEvent(event, robotoF);
-                }
-                else if (msTopicInput.isSelected) {
-                    msTopicInput.handleEvent(event, robotoF);
-                }
-                else if (msContentTextEditInput.isSelected) {
-                    msContentTextEditInput.handleEvent(event, renderer, robotoF);
-                }
-
+                ImGui_ImplSDL2_ProcessEvent(&event);
                 if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
                     running = false;
                     // TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
@@ -2830,20 +2786,6 @@ int main(int argc, char* argv[])
                 }
                 if (event.type == SDL_KEYDOWN) {
                     keys[event.key.keysym.scancode] = true;
-                    if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {
-                        if (msNameInput.isSelected) {
-                            msNameInput.isSelected = false;
-                            msTopicInput.isSelected = true;
-                        }
-                        else if (msTopicInput.isSelected) {
-                            msTopicInput.isSelected = false;
-                            msContentTextEditInput.isSelected = true;
-                        }
-                        else if (msContentTextEditInput.isSelected) {
-                            msContentTextEditInput.isSelected = false;
-                            msNameInput.isSelected = true;
-                        }
-                    }
                 }
                 if (event.type == SDL_KEYUP) {
                     keys[event.key.keysym.scancode] = false;
@@ -2863,7 +2805,8 @@ int main(int argc, char* argv[])
                         }
                     }
                     if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
-                        sendMessage(socket, msNameText, msNameInput.text, msTopicInput.text, msContentTextEditInput, msTopicInput, msNameInput, renderer, robotoF, msAttachments);
+                        sendMessage(socket, msNameText, msReceiver, msTopic, msMessage, renderer, robotoF, msAttachments);
+                        shouldUseFirstWidgets = !shouldUseFirstWidgets;
                     }
                     if (SDL_PointInFRect(&mousePos, &msAddAttachmentBtnR)) {
                         const nfdpathset_t* outPaths;
@@ -2906,21 +2849,6 @@ int main(int argc, char* argv[])
                             }
                             NFD_PathSet_Free(outPaths);
                         }
-                    }
-                    else if (SDL_PointInRect(&mousePos, &msNameInput.r)) {
-                        msNameInput.isSelected = true;
-                        msTopicInput.isSelected = false;
-                        msContentTextEditInput.isSelected = false;
-                    }
-                    else if (SDL_PointInRect(&mousePos, &msTopicInput.r)) {
-                        msNameInput.isSelected = false;
-                        msTopicInput.isSelected = true;
-                        msContentTextEditInput.isSelected = false;
-                    }
-                    else if (SDL_PointInRect(&mousePos, &msContentTextEditInput.r)) {
-                        msNameInput.isSelected = false;
-                        msTopicInput.isSelected = false;
-                        msContentTextEditInput.isSelected = true;
                     }
                     {
                         int i = 0;
@@ -2994,25 +2922,50 @@ int main(int argc, char* argv[])
                     }
                 }
             }
+            ImGui_ImplSDLRenderer_NewFrame();
+            ImGui_ImplSDL2_NewFrame(window);
+            io.MousePos.x = mousePos.x;
+            io.MousePos.y = mousePos.y;
+            ImGui::NewFrame();
+            {
+                ImGui::Begin("MessageSend", 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
+                ImGui::Text("");
+                ImGui::Text("");
+                ImGui::PushItemWidth(ImGui::GetWindowSize().x / 2.1);
+                if (shouldUseFirstWidgets) {
+                    ImGui::InputText("##receiver", &msReceiver);
+                }
+                else {
+                    ImGui::InputText("##receiver2", &msReceiver);
+                }
+                ImGui::SameLine(0, 5);
+                ImGui::PushItemWidth(ImGui::GetWindowSize().x / 2.1);
+                if (shouldUseFirstWidgets) {
+                    ImGui::InputText("##topic", &msTopic);
+                }
+                else {
+                    ImGui::InputText("##topic2", &msTopic);
+                }
+                ImGui::Text("");
+                ImGui::Text("");
+                if (shouldUseFirstWidgets) {
+                    ImGui::InputTextMultiline("##message", &msMessage, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16));
+                }
+                else {
+                    ImGui::InputTextMultiline("##message2", &msMessage, ImVec2(-FLT_MIN, ImGui::GetTextLineHeight() * 16));
+                }
+                ImGui::End();
+            }
+            ImGui::Render();
             SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
             SDL_RenderClear(renderer);
-            msNameInput.draw(renderer, robotoF);
-            msTopicInput.draw(renderer, robotoF);
-            msContentTextEditInput.draw(renderer);
+            ImGui_ImplSDLRenderer_RenderDrawData(ImGui::GetDrawData());
+            SDL_RenderSetViewport(renderer, 0);
             SDL_RenderCopyF(renderer, closeT, 0, &closeBtnR);
             msNameText.draw(renderer);
             msTopicText.draw(renderer);
             msContentText.draw(renderer);
             SDL_SetRenderDrawColor(renderer, 52, 131, 235, 255);
-            if (msNameInput.isSelected) {
-                SDL_RenderDrawRect(renderer, &msNameInput.r);
-            }
-            else if (msTopicInput.isSelected) {
-                SDL_RenderDrawRect(renderer, &msTopicInput.r);
-            }
-            else if (msContentTextEditInput.isSelected) {
-                SDL_RenderDrawRect(renderer, &msContentTextEditInput.r);
-            }
             SDL_RenderCopyF(renderer, sendT, 0, &msSendBtnR);
             SDL_RenderCopyF(renderer, addAttachmentT, 0, &msAddAttachmentBtnR);
             msAttachmentsText.draw(renderer);
