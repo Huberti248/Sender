@@ -2,7 +2,6 @@
 TODO:
 - Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - When adding attachments with big size the program doesn't respond. Display some info about it?
-- Think what might happen if .txt file will be send from one OS to another (binary mode file read and write)
 - When std::wstring is send to the server, std::wstring should be received from client on the server
 - Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
 - Chekout getSize() and popBack() functions for exotic characters as well as remember to use them for every place where polish character might be placed
@@ -11,8 +10,9 @@ TODO:
 - Checkout have many clients could be connected to the server at the same time + handle situation when server is full
 - Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
-- Replace own inputs with imgui ones
 - Think what will happen when user exceeds e.g. character limit (more characters than there could be in int data type)
+- Allow to see sent messages by the user?
+- What if send file will contain some xml tags and I will store file content in xml format? Will it collide or will it be handled by server somehow?
 */
 #ifdef __linux__
 #include <SDL2/SDL.h>
@@ -546,479 +546,10 @@ void drawInBorders(Text& text, SDL_FRect r, SDL_Renderer* renderer, TTF_Font* fo
     text.setText(renderer, font, currentText, { TEXT_COLOR });
 }
 
-struct Input {
-    SDL_Rect r{};
-    Text text;
-    SDL_Rect cursorR{};
-    int currentLetter = 0;
-    std::u32string left;
-    std::u32string right;
-    bool isPassword = false;
-    bool isSelected = false;
-
-    void handleEvent(SDL_Event event, TTF_Font* font)
-    {
-        if (event.type == SDL_KEYDOWN) {
-            if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-                if (currentLetter) {
-                    utf8Erase(text.text, currentLetter - 1);
-                    if (!right.empty()) {
-                        std::u32string s = utf8ToUcs4(text.text);
-                        s.push_back(right.front());
-                        right.erase(0, 1);
-                        text.text = ucs4ToUtf8(s);
-                    }
-                    else if (!left.empty()) {
-                        std::u32string s = utf8ToUcs4(text.text);
-                        s.insert(0, 1, left.back());
-                        left.pop_back();
-                        text.text = ucs4ToUtf8(s);
-                    }
-                    else {
-                        --currentLetter;
-                    }
-                    text.setText(renderer, font, text.text, {});
-                }
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) {
-                if (currentLetter) {
-                    --currentLetter;
-                }
-                else {
-                    if (!left.empty()) {
-                        std::u32string s = utf8ToUcs4(text.text);
-                        s.insert(s.begin(), left.back());
-                        left.pop_back();
-                        right.insert(right.begin(), s.back());
-                        s.pop_back();
-                        text.setText(renderer, font, ucs4ToUtf8(s), {});
-                    }
-                }
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT) {
-                if (currentLetter != utf8ToUcs4(text.text).size()) {
-                    ++currentLetter;
-                }
-                else {
-                    if (!right.empty()) {
-                        std::u32string s = utf8ToUcs4(text.text);
-                        s.push_back(right.front());
-                        right.erase(0, 1);
-                        left.push_back(s.front());
-                        s.erase(0, 1);
-                        text.setText(renderer, font, ucs4ToUtf8(s), {});
-                    }
-                }
-            }
-        }
-        else if (event.type == SDL_TEXTINPUT) {
-            utf8Insert(text.text, currentLetter, event.text.text);
-            text.setText(renderer, font, text.text, {});
-            ++currentLetter;
-            while (text.dstR.x + text.dstR.w > r.x + r.w) {
-                --currentLetter;
-                left.push_back(utf8ToUcs4(text.text)[0]);
-                utf8Erase(text.text, 0);
-                text.setText(renderer, font, text.text, {});
-            }
-        }
-    }
-
-    void draw(SDL_Renderer* renderer, TTF_Font* font)
-    {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
-        SDL_RenderFillRect(renderer, &r);
-        if (isPassword) {
-            std::string currPassword = text.text;
-            text.setText(renderer, font, std::string(utf8GetSize(currPassword), '*'), { TEXT_COLOR });
-            text.draw(renderer);
-            text.setText(renderer, font, currPassword, { TEXT_COLOR });
-        }
-        else {
-            text.draw(renderer);
-        }
-        SDL_SetRenderDrawColor(renderer, 0, 255, 0, 0);
-        Text t = text;
-        t.text = utf8Substr(t.text, 0, currentLetter);
-        t.setText(renderer, font, t.text, {});
-        if (currentLetter) {
-            cursorR.x = t.dstR.x + t.dstR.w;
-        }
-        else {
-            cursorR.x = t.dstR.x;
-        }
-        if (isSelected) {
-            SDL_RenderFillRect(renderer, &cursorR);
-        }
-    }
-};
-
-struct TextEditInput {
-    SDL_Rect r{};
-    SDL_Rect cursorR{};
-    std::vector<Text> texts;
-    int currentCursorLetterIndex = 0;
-    int currentCursorTextIndex = 0;
-    int scrollUpCount = 0;
-    bool isSelected = false;
-
-    std::string getText()
-    {
-        std::string text;
-        for (int i = 0; i < texts.size(); ++i) {
-            text += texts[i].text + "\n";
-        }
-        return text;
-    }
-
-    void clear(SDL_Renderer* renderer, TTF_Font* font)
-    {
-        if (texts.size() > 1) {
-            texts.erase(texts.begin() + 1, texts.end());
-        }
-        if (!texts.empty()) {
-            texts.front().setText(renderer, font, "", {});
-        }
-        currentCursorLetterIndex = 0;
-        currentCursorTextIndex = 0;
-        scrollUpCount = 0;
-    }
-
-    void putTypedTextIntoInput(SDL_Event event, SDL_Renderer* renderer, TTF_Font* font)
-    {
-        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-        str.insert(currentCursorLetterIndex, utf8ToUcs4(std::string(event.text.text)));
-        texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
-    }
-
-    void moveCursorOneCharacterRight(SDL_Renderer* renderer, TTF_Font* font)
-    {
-        ++currentCursorLetterIndex;
-        Text text = texts[currentCursorTextIndex];
-        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-        cursorR.x = text.dstR.x + text.dstR.w;
-    }
-
-    int getMaxVisiableCount()
-    {
-        return r.h / texts.front().dstR.h;
-    }
-
-    void handleEvent(SDL_Event event, SDL_Renderer* renderer, TTF_Font* font)
-    {
-        if (event.type == SDL_TEXTINPUT) {
-            // TODO: When the user have text excedeed down border and it enters it on the top it shouldn't always scroll
-            putTypedTextIntoInput(event, renderer, font);
-            moveCursorOneCharacterRight(renderer, font);
-            int currentCursorTextIndexBackup = currentCursorTextIndex;
-            bool isFirstIteration = true;
-            while (texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w > r.x + r.w) {
-                // NOTE: Put last character onto next line. If it will exceed second line repeat it until it won't.
-                bool backupTextIndexChanged = false;
-                if (isFirstIteration && currentCursorLetterIndex == texts[currentCursorTextIndex].text.size()) {
-                    ++currentCursorTextIndexBackup;
-                    currentCursorLetterIndex = 1;
-                    backupTextIndexChanged = true;
-                }
-                if (currentCursorTextIndex + 1 == texts.size()) {
-                    texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, Text());
-                    texts[currentCursorTextIndex + 1] = texts[currentCursorTextIndex];
-                    texts[currentCursorTextIndex + 1].setText(renderer, font, "", {});
-                    texts[currentCursorTextIndex + 1].dstR.y += texts[currentCursorTextIndex].dstR.h;
-                }
-                if (backupTextIndexChanged) {
-                    cursorR.x = texts[currentCursorTextIndexBackup].dstR.x + texts[currentCursorTextIndexBackup].dstR.w;
-                    cursorR.y = texts[currentCursorTextIndexBackup].dstR.y + texts[currentCursorTextIndexBackup].dstR.h / 2 - cursorR.h / 2;
-                }
-                std::u32string s1 = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                std::u32string s2 = utf8ToUcs4(texts[currentCursorTextIndex + 1].text);
-                s2.insert(0, 1, s1.back());
-                s1.pop_back();
-                texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(s1), {});
-                texts[currentCursorTextIndex + 1].setText(renderer, font, ucs4ToUtf8(s2), {});
-                ++currentCursorTextIndex;
-                isFirstIteration = false;
-            }
-
-            currentCursorTextIndex = currentCursorTextIndexBackup;
-            if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
-            {
-                for (int i = 0; i < texts.size(); ++i) {
-                    texts[i].dstR.y -= texts[i].dstR.h;
-                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                }
-                ++scrollUpCount;
-            }
-// TODO: It should scroll down when the user presses enter in the last line.
-// NOTE: If it got out of down border move up texts and cursor
-#if 0
-            if (texts.back().dstR.y + texts.back().dstR.h > r.y + r.h) {
-                for (int i = 0; i < texts.size(); ++i) {
-                    texts[i].dstR.y -= texts[i].dstR.h;
-                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                }
-                ++scrollUpCount;
-            }
-#endif
-        }
-        if (event.type == SDL_KEYDOWN) {
-            if (event.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
-                std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                if (!str.empty()) {
-                    if (currentCursorLetterIndex) {
-                        --currentCursorLetterIndex;
-                        str.erase(currentCursorLetterIndex, 1);
-                        texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
-                        Text text = texts[currentCursorTextIndex];
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                        // TODO: It should be possible to remove "enter"
-                        if (str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
-                            texts.erase(texts.begin() + currentCursorTextIndex);
-                            --currentCursorTextIndex;
-                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                            if (scrollUpCount > 0) {
-                                for (int i = 0; i < texts.size(); ++i) {
-                                    texts[i].dstR.y += texts[i].dstR.h;
-                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                                }
-                                --scrollUpCount;
-                            }
-                        }
-                        else if (!str.empty() && currentCursorLetterIndex == 0 && currentCursorTextIndex != 0) {
-                            --currentCursorTextIndex;
-                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                            if (scrollUpCount > 0) {
-                                for (int i = 0; i < texts.size(); ++i) {
-                                    texts[i].dstR.y += texts[i].dstR.h;
-                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                                }
-                                --scrollUpCount;
-                            }
-                        }
-                    }
-                    else {
-                        if (currentCursorTextIndex) {
-                            --currentCursorTextIndex;
-                            str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                            if (!str.empty()) {
-                                str.pop_back();
-                            }
-                            texts[currentCursorTextIndex].setText(renderer, font, ucs4ToUtf8(str), {});
-                            currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                            cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                        }
-                    }
-                }
-#if 0
-                std::string s;
-                for (int i = 0; i < texts.size(); ++i) {
-                    s += texts[i].text;
-                }
-                Text text = texts.front();
-                texts.clear();
-                do {
-                    text.setText(renderer, font, s, {});
-                    while (text.dstR.x + text.dstR.w > r.x + r.w) {
-                        text.text.pop_back();
-                        text.setText(renderer, font, text.text, {});
-                    }
-                    s = s.substr(text.text.size());
-                    texts.push_back(text);
-                    if (texts.size() > 1) {
-                        texts.back().dstR.y += texts.back().dstR.h;
-                    }
-                    text = texts.back();
-                } while (!s.empty());
-#endif
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-                if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
-                {
-                    for (int i = 0; i < texts.size(); ++i) {
-                        texts[i].dstR.y -= texts[i].dstR.h;
-                        cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                    }
-                    ++scrollUpCount;
-                }
-                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
-                texts[currentCursorTextIndex + 1].dstR.y += texts[currentCursorTextIndex + 1].dstR.h;
-                // TODO: Is substr with currentCursorLetterIndex correct?
-                std::string left = texts[currentCursorTextIndex].text.substr(0, currentCursorLetterIndex);
-                std::string right = texts[currentCursorTextIndex].text.substr(currentCursorLetterIndex);
-                texts[currentCursorTextIndex].setText(renderer, font, left, {});
-                texts[currentCursorTextIndex + 1].setText(renderer, font, right, {});
-                ++currentCursorTextIndex;
-                currentCursorLetterIndex = 0;
-                cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-
-#if 0
-                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
-                // TODO: Implement
-                // TODO: Create new Text() and put everything after currentCursorLetterIndex on the next line
-                texts.insert(texts.begin() + currentCursorTextIndex + 1, 1, texts[currentCursorTextIndex]);
-                texts[currentCursorTextIndex + 1].dstR.y += texts[currentCursorTextIndex + 1].dstR.h;
-                // TODO: Is substr range correct?
-                std::string left = texts[currentCursorTextIndex].text.substr(0, currentCursorLetterIndex);
-                std::string right = texts[currentCursorTextIndex].text.substr(currentCursorLetterIndex);
-                texts[currentCursorTextIndex].setText(renderer, font, left, {});
-                texts[currentCursorTextIndex + 1].setText(renderer, font, right, {});
-#endif
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) {
-                // TODO: When moving at the beginning of text created by enter it should allow to move at the beginning of text
-                --currentCursorLetterIndex;
-                if (currentCursorLetterIndex == 0 || currentCursorLetterIndex == -1) {
-                    if (currentCursorTextIndex) {
-                        if (currentCursorTextIndex - scrollUpCount == 0) // NOTE: If currentCursorTextIndex is on first visible line
-                        {
-                            if (scrollUpCount > 0) {
-                                for (int i = 0; i < texts.size(); ++i) {
-                                    texts[i].dstR.y += texts[i].dstR.h;
-                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                                }
-                                --scrollUpCount;
-                            }
-                        }
-                        cursorR.y -= texts[currentCursorTextIndex].dstR.h;
-                        --currentCursorTextIndex;
-                        currentCursorLetterIndex = texts[currentCursorTextIndex].text.size();
-                        Text text = texts[currentCursorTextIndex];
-                        std::u32string str = utf8ToUcs4(text.text);
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                    }
-                    else {
-                        if (currentCursorLetterIndex == -1) {
-                            ++currentCursorLetterIndex;
-                        }
-                        Text text = texts[currentCursorTextIndex];
-                        std::u32string str = utf8ToUcs4(text.text);
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                    }
-                }
-                else {
-                    Text text = texts[currentCursorTextIndex];
-                    std::u32string str = utf8ToUcs4(text.text);
-                    text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                    cursorR.x = text.dstR.x + text.dstR.w;
-                }
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT) {
-                ++currentCursorLetterIndex;
-                Text text = texts[currentCursorTextIndex];
-                std::u32string str = utf8ToUcs4(text.text);
-                text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                cursorR.x = text.dstR.x + text.dstR.w;
-                if (currentCursorLetterIndex > texts[currentCursorTextIndex].text.size()) {
-                    if (currentCursorTextIndex != texts.size() - 1) {
-                        if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
-                        {
-                            if (currentCursorTextIndex != texts.size() - 1) {
-                                for (int i = 0; i < texts.size(); ++i) {
-                                    texts[i].dstR.y -= texts[i].dstR.h;
-                                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                                }
-                                ++scrollUpCount;
-                            }
-                        }
-                        cursorR.y += texts[currentCursorTextIndex].dstR.h;
-                        ++currentCursorTextIndex;
-                        currentCursorLetterIndex = 0;
-                        ++currentCursorLetterIndex;
-                        Text text = texts[currentCursorTextIndex];
-                        std::u32string str = utf8ToUcs4(text.text);
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                    }
-                    else {
-                        --currentCursorLetterIndex;
-                    }
-                }
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_DOWN) {
-                if (getMaxVisiableCount() - 1 + scrollUpCount == currentCursorTextIndex) // NOTE: If cursor is currently on the last visiable line
-                {
-                    if (currentCursorTextIndex != texts.size() - 1) {
-                        for (int i = 0; i < texts.size(); ++i) {
-                            texts[i].dstR.y -= texts[i].dstR.h;
-                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                        }
-                        ++scrollUpCount;
-                    }
-                }
-                if (currentCursorTextIndex != texts.size() - 1) {
-                    ++currentCursorTextIndex;
-                    if (currentCursorLetterIndex > texts[currentCursorTextIndex].text.size() - 1) {
-                        currentCursorLetterIndex = texts[currentCursorTextIndex].text.size() - 1;
-                        cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                    }
-                    else {
-                        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                        Text text = texts[currentCursorTextIndex];
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                    }
-                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                }
-            }
-            else if (event.key.keysym.scancode == SDL_SCANCODE_UP) {
-                if (currentCursorTextIndex - scrollUpCount == 0) // NOTE: If currentCursorTextIndex is on first visible line
-                {
-                    if (scrollUpCount > 0) {
-                        for (int i = 0; i < texts.size(); ++i) {
-                            texts[i].dstR.y += texts[i].dstR.h;
-                            cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                        }
-                        --scrollUpCount;
-                    }
-                }
-                if (currentCursorTextIndex > scrollUpCount) {
-                    --currentCursorTextIndex;
-                    if (currentCursorLetterIndex > texts[currentCursorTextIndex].text.size() - 1) {
-                        currentCursorLetterIndex = texts[currentCursorTextIndex].text.size() - 1;
-                        cursorR.x = texts[currentCursorTextIndex].dstR.x + texts[currentCursorTextIndex].dstR.w;
-                    }
-                    else {
-                        std::u32string str = utf8ToUcs4(texts[currentCursorTextIndex].text);
-                        Text text = texts[currentCursorTextIndex];
-                        text.setText(renderer, font, ucs4ToUtf8(str.substr(0, currentCursorLetterIndex)), {});
-                        cursorR.x = text.dstR.x + text.dstR.w;
-                    }
-                    cursorR.y = texts[currentCursorTextIndex].dstR.y + texts[currentCursorTextIndex].dstR.h / 2 - cursorR.h / 2;
-                }
-            }
-        }
-    }
-
-    void draw(SDL_Renderer* renderer)
-    {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
-        SDL_RenderFillRect(renderer, &r);
-        for (int i = 0; i < texts.size(); ++i) {
-            if (!(texts[i].dstR.y < r.y)) {
-                texts[i].draw(renderer);
-            }
-        }
-        if (isSelected) {
-            SDL_SetRenderDrawColor(renderer, 0, 255, 0, 0);
-            SDL_RenderFillRect(renderer, &cursorR);
-        }
-    }
-};
-
-std::string readWholeFileInBinary(std::string path)
+std::string readWholeFile(std::string path)
 {
     std::stringstream ss;
-    std::ifstream ifs(path, std::ifstream::in | std::ifstream::binary);
+    std::ifstream ifs(path, std::ifstream::in);
     ss << ifs.rdbuf();
     return ss.str();
 }
@@ -1038,7 +569,7 @@ int receive(TCPsocket socket, std::string& msg)
     return result;
 }
 
-void sendMessage(TCPsocket socket, Text msNameText, std::string& msReceiver, std::string& msTopic, std::string& msMessage, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& attachments)
+void sendMessage(TCPsocket socket, Text msNameText, std::string& msReceiver, std::string& msTopic, std::string& msMessage, SDL_Renderer* renderer, TTF_Font* font, std::vector<Attachment>& msAttachments)
 {
     pugi::xml_document doc;
     pugi::xml_node rootNode = doc.append_child("root");
@@ -1054,12 +585,12 @@ void sendMessage(TCPsocket socket, Text msNameText, std::string& msReceiver, std
     msTopicInputNode.append_child(pugi::node_pcdata).set_value(msTopic.c_str());
     pugi::xml_node msContentInputNode = rootNode.append_child("msContentInput");
     msContentInputNode.append_child(pugi::node_pcdata).set_value(msMessage.c_str());
-    for (int i = 0; i < attachments.size(); ++i) {
+    for (int i = 0; i < msAttachments.size(); ++i) {
         pugi::xml_node attachmentNode = rootNode.append_child("attachment");
         pugi::xml_node pathNode = attachmentNode.append_child("path");
-        pathNode.append_child(pugi::node_pcdata).set_value(attachments[i].path.c_str());
+        pathNode.append_child(pugi::node_pcdata).set_value(msAttachments[i].path.c_str());
         pugi::xml_node fileContentNode = attachmentNode.append_child("fileContent");
-        fileContentNode.append_child(pugi::node_pcdata).set_value(attachments[i].fileContent.c_str());
+        fileContentNode.append_child(pugi::node_pcdata).set_value(msAttachments[i].fileContent.c_str());
     }
     std::stringstream ss;
     doc.save(ss);
@@ -1067,7 +598,7 @@ void sendMessage(TCPsocket socket, Text msNameText, std::string& msReceiver, std
     msReceiver.clear();
     msTopic.clear();
     msMessage.clear();
-    attachments.clear();
+    msAttachments.clear();
 }
 
 std::vector<pugi::xml_node> pugiXmlObjectRangeToStdVector(pugi::xml_object_range<pugi::xml_named_node_iterator> xmlObjectRange)
@@ -1230,8 +761,8 @@ void runServer()
                                                 pugi::xml_node attachmentNode2 = currMessageNode.append_child("attachment");
                                                 pugi::xml_node userPathNode = attachmentNode2.append_child("path");
                                                 userPathNode.append_child(pugi::node_pcdata).set_value(attachmentNode.child("userPath").text().as_string());
-                                                pugi::xml_node fileNode = attachmentNode2.append_child("file");
-                                                fileNode.append_child(pugi::node_pcdata).set_value(readWholeFileInBinary(attachmentNode.child("serverPath").text().as_string()).c_str());
+                                                pugi::xml_node fileContentNode = attachmentNode2.append_child("fileContent");
+                                                fileContentNode.append_child(pugi::node_pcdata).set_value(readWholeFile(attachmentNode.child("serverPath").text().as_string()).c_str());
                                             }
                                         }
                                     }
@@ -1290,7 +821,7 @@ void runServer()
                                                 storePathWithFilename = oldStorePathWithFilename;
                                                 storePathWithFilename += std::to_string(i);
                                             }
-                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out);
                                             ofs << fileContent;
                                             pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
                                             attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
@@ -1347,7 +878,7 @@ void runServer()
                                                 storePathWithFilename = oldStorePathWithFilename;
                                                 storePathWithFilename += std::to_string(i);
                                             }
-                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out | std::ofstream::binary);
+                                            std::ofstream ofs(storePathWithFilename, std::ofstream::out);
                                             ofs << fileContent;
                                             pugi::xml_node attachmentNode = attachmentsNode.append_child("attachment");
                                             attachmentNode.append_child("userPath").append_child(pugi::node_pcdata).set_value(path.c_str());
@@ -2045,26 +1576,26 @@ int main(int argc, char* argv[])
     msSwapBtnR.x = closeBtnR.x + closeBtnR.w;
     msSwapBtnR.y = closeBtnR.y;
     Text msNameText;
-    msNameText.setText(renderer, robotoF, u8"Nazwa", { TEXT_COLOR });
+    msNameText.setText(renderer, robotoF, u8"Nazwa", { 255,255,255 });
     msNameText.dstR.w = 60;
     msNameText.dstR.h = 20;
     msNameText.dstR.x = msSwapBtnR.x + msSwapBtnR.w + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) / 2 - msNameText.dstR.w / 2;
     msNameText.dstR.y = 0;
     Text msTopicText;
-    msTopicText.setText(renderer, robotoF, "Temat", { TEXT_COLOR });
+    msTopicText.setText(renderer, robotoF, "Temat", { 255, 255, 255 });
     msTopicText.dstR.w = 60;
     msTopicText.dstR.h = 20;
     msTopicText.dstR.x = msSwapBtnR.x + msSwapBtnR.w + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) / 2 - msTopicText.dstR.w / 2;
     msTopicText.dstR.y = msNameText.dstR.y;
     msTopicText.autoAdjustW = true;
     Text msContentText;
-    msContentText.setText(renderer, robotoF, u8"Treść", { TEXT_COLOR });
+    msContentText.setText(renderer, robotoF, u8"Treść", { 255, 255, 255 });
     msContentText.dstR.w = 60;
     msContentText.dstR.h = 20;
     msContentText.dstR.x = windowWidth / 2 - msContentText.dstR.w / 2;
     msContentText.dstR.y = closeBtnR.y + closeBtnR.h;
     Text msAttachmentsText;
-    msAttachmentsText.setText(renderer, robotoF, u8"Załączniki", { TEXT_COLOR });
+    msAttachmentsText.setText(renderer, robotoF, u8"Załączniki", { 255, 255, 255 });
     msAttachmentsText.dstR.w = 70;
     msAttachmentsText.dstR.h = 20;
     msAttachmentsText.dstR.x = windowWidth / 2 - msAttachmentsText.dstR.w / 2;
@@ -2601,7 +2132,7 @@ int main(int argc, char* argv[])
                                     }
                                 }
                                 if (shouldSave) {
-                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out | std::ofstream::binary);
+                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
                                     ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
                                     ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
                                 }
@@ -2638,7 +2169,7 @@ int main(int argc, char* argv[])
                                     }
                                 }
                                 if (shouldSave) {
-                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out | std::ofstream::binary);
+                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
                                     ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
                                 }
                             }
@@ -2798,10 +2329,10 @@ int main(int argc, char* argv[])
                     }
                     if (SDL_PointInFRect(&mousePos, &msSwapBtnR)) {
                         if (msNameText.text == "Klasa") {
-                            msNameText.setText(renderer, robotoF, "Nazwa", {});
+                            msNameText.setText(renderer, robotoF, "Nazwa", {255,255,255});
                         }
                         else {
-                            msNameText.setText(renderer, robotoF, "Klasa", {});
+                            msNameText.setText(renderer, robotoF, "Klasa", {255,255,255});
                         }
                     }
                     if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
@@ -2819,7 +2350,7 @@ int main(int argc, char* argv[])
                                     nfdnchar_t* outPath;
                                     nfdresult_t result = NFD_PathSet_GetPathN(outPaths, i, &outPath);
                                     if (result == NFD_OKAY) {
-                                        std::ifstream ifs(outPath, std::ifstream::in | std::ifstream::binary);
+                                        std::ifstream ifs(outPath, std::ifstream::in);
                                         std::stringstream ss;
                                         ss << ifs.rdbuf();
                                         msAttachments.push_back(Attachment());
@@ -2957,7 +2488,7 @@ int main(int argc, char* argv[])
                 ImGui::End();
             }
             ImGui::Render();
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 0);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
             SDL_RenderClear(renderer);
             ImGui_ImplSDLRenderer_RenderDrawData(ImGui::GetDrawData());
             SDL_RenderSetViewport(renderer, 0);
