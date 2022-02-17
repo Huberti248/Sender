@@ -8,11 +8,14 @@ TODO:
 - Before final release remember to delete not used code from the server (in case of security)
 - Some mechanism to automatically disconnect some clients which haven't responded for a very long time?
 - Checkout have many clients could be connected to the server at the same time + handle situation when server is full
-- Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be dipslayed on the client (use this Windows settings?)
+- Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be displayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
 - Think what will happen when user exceeds e.g. character limit (more characters than there could be in int data type)
 - Allow to see sent messages by the user?
-- What if send file will contain some xml tags and I will store file content in xml format? Will it collide or will it be handled by server somehow?
+- Add https or encryption
+- Add call?
+- Add desktop sharing?
+- Make it resolution independent (responsive)?
 */
 #ifdef __linux__
 #include <SDL2/SDL.h>
@@ -58,6 +61,12 @@ TODO:
 //#include <elgamal.h>
 //#include <fhmqv.h>
 //#include <filters.h>
+#include <hex.h>
+#include <cryptlib.h>
+#include <secblock.h>
+#include <filters.h >
+#include <aes.h>
+#include <eax.h>
 #include <fstream>
 #include <functional>
 //#include <gcm.h>
@@ -153,6 +162,7 @@ enum PacketType : i32 {
     SendMessage,
     SendMessageToClass,
     ReceiveMessages,
+    ReceiveSentMessages,
     MakeCall,
     CheckCalls,
     PendingCall,
@@ -451,6 +461,7 @@ enum class State {
     MessageList,
     MessageContent,
     MessageSend,
+    MessageHistory,
     Call,
 };
 
@@ -465,6 +476,7 @@ struct Attachment {
 struct Message {
     Text topicText;
     Text senderNameText;
+    Text receiverNameText;
     Text dateText;
     Text contentText;
     SDL_FRect r{};
@@ -770,6 +782,51 @@ void runServer()
                                     d.save(ss);
                                     send(clients[i].socket, ss.str());
                                 }
+                                else if (packetType == PacketType::ReceiveSentMessages) {
+                                    pugi::xml_document doc;
+                                    doc.load_file((prefPath + "data.xml").c_str());
+                                    auto messageNodes = doc.child("root").child("messages").children("message");
+                                    pugi::xml_document d;
+                                    pugi::xml_node rootNode = d.append_child("root");
+                                    for (pugi::xml_node& messageNode : messageNodes) {
+                                        if (messageNode.child("senderName").text().as_string() == clients[i].name) {
+                                            pugi::xml_node currMessageNode = rootNode.append_child("message");
+                                            pugi::xml_node topicNode = currMessageNode.append_child("topic");
+                                            topicNode.append_child(pugi::node_pcdata).set_value(messageNode.child("topic").text().as_string());
+                                            if (messageNode.child("receiverName")) {
+                                                pugi::xml_node receiverNameNode = currMessageNode.append_child("receiverName");
+                                                receiverNameNode.append_child(pugi::node_pcdata).set_value(messageNode.child("receiverName").text().as_string());
+                                            }
+                                            else {
+                                                pugi::xml_node classReceiverNameNode = currMessageNode.append_child("classReceiverName");
+                                                classReceiverNameNode.append_child(pugi::node_pcdata).set_value(messageNode.child("classReceiverName").text().as_string());
+                                            }
+                                            pugi::xml_node contentNode = currMessageNode.append_child("content");
+                                            contentNode.append_child(pugi::node_pcdata).set_value(messageNode.child("content").text().as_string());
+                                            pugi::xml_node dateTimeNode = currMessageNode.append_child("dateTime");
+                                            dateTimeNode.append_child(pugi::node_pcdata).set_value(messageNode.child("dateTime").text().as_string());
+                                            auto attachmentNodes = messageNode.child("attachments").children("attachment");
+                                            int attachmentNodesCount = 0;
+                                            {
+                                                for (pugi::xml_node& attachmentNode : attachmentNodes) {
+                                                    ++attachmentNodesCount;
+                                                }
+                                            }
+                                            pugi::xml_node attachmentNodesCountNode = currMessageNode.append_child("attachmentNodesCount");
+                                            attachmentNodesCountNode.append_child(pugi::node_pcdata).set_value(std::to_string(attachmentNodesCount).c_str());
+                                            for (pugi::xml_node& attachmentNode : attachmentNodes) {
+                                                pugi::xml_node attachmentNode2 = currMessageNode.append_child("attachment");
+                                                pugi::xml_node userPathNode = attachmentNode2.append_child("path");
+                                                userPathNode.append_child(pugi::node_pcdata).set_value(attachmentNode.child("userPath").text().as_string());
+                                                pugi::xml_node fileContentNode = attachmentNode2.append_child("fileContent");
+                                                fileContentNode.append_child(pugi::node_pcdata).set_value(readWholeFile(attachmentNode.child("serverPath").text().as_string()).c_str());
+                                            }
+                                        }
+                                    }
+                                    std::stringstream ss;
+                                    d.save(ss);
+                                    send(clients[i].socket, ss.str());
+                                }
                                 else if (packetType == PacketType::SendMessage) {
                                     std::string msNameInputText = doc.child("root").child("msNameInput").text().as_string();
                                     std::string msTopicInputText = doc.child("root").child("msTopicInput").text().as_string();
@@ -915,7 +972,9 @@ enum CallState {
 struct MessageList {
     std::vector<Message> messages;
     SDL_Texture* writeMessageT = 0;
+    SDL_Texture* historyT = 0;
     SDL_FRect writeMessageBtnR{};
+    SDL_FRect historyBtnR{};
     SDL_FRect callBtnR{};
     Text nameText;
     SDL_FRect nameR{};
@@ -925,6 +984,12 @@ struct MessageList {
     Text callerNameText;
     CallState callState = CallState::Non;
     Text userInfoText;
+};
+
+struct MessageHistory {
+    SDL_Texture* messageListT = 0;
+    std::vector<Message> messages;
+    SDL_FRect messageListBtnR{};
 };
 
 std::string getFilename(std::string s)
@@ -1011,6 +1076,253 @@ void textCentered(std::string text)
 
 int main(int argc, char* argv[])
 {
+#if 0 // TODO: How to transfer key/iv to the server xor from server to the client? Do I need to transfer it or should I generate new iv for each message?
+    CryptoPP::SecByteBlock key(CryptoPP::AES::DEFAULT_KEYLENGTH);
+    CryptoPP::SecByteBlock iv(CryptoPP::AES::BLOCKSIZE);
+    std::string plain = "Hello, World!";
+    std::string cipher;
+    std::string recovered;
+
+    CryptoPP::EAX<CryptoPP::AES>::Encryption e;
+    e.SetKeyWithIV(key, key.size(), iv);
+
+    CryptoPP::StringSource(plain, true,
+        new CryptoPP::AuthenticatedEncryptionFilter(e,
+            new CryptoPP::StringSink(cipher)) // AuthenticatedEncryptionFilter
+    ); // StringSource
+
+
+        CryptoPP::EAX<CryptoPP::AES>::Decryption d;
+    d.SetKeyWithIV(key, key.size(), iv);
+
+    CryptoPP::StringSource s(cipher, true,
+        new CryptoPP::AuthenticatedDecryptionFilter(d,
+            new CryptoPP::StringSink(recovered)) // AuthenticatedDecryptionFilter
+    ); // StringSource
+
+    std::cout << plain << std::endl
+              << cipher << std::endl
+              << recovered << std::endl;
+#endif
+#if 0
+    const int TAG_SIZE = 16;
+
+    // Encrypted, with Tag
+    std::string cipher, encoded;
+
+    // Recovered
+    std::string radata, rpdata;
+
+    /*********************************\
+	\*********************************/
+
+    //KEY 0000000000000000000000000000000000000000000000000000000000000000
+    //IV  000000000000000000000000
+    //HDR 00000000000000000000000000000000
+    //PTX 00000000000000000000000000000000
+    //CTX cea7403d4d606b6e074ec5d3baf39d18
+    //TAG ae9b1771dba9cf62b39be017940330b4
+
+    // Test Vector 003
+    CryptoPP::SecByteBlock key(32);
+
+    byte iv[12];
+    memset(iv, 0, sizeof(iv));
+
+    std::string adata("Hello, World!hey");
+    std::string pdata("Hello, World!hey");
+
+    /*********************************\
+	\*********************************/
+
+    // Pretty print
+    encoded.clear();
+    CryptoPP::StringSource(key, key.size(), true,
+        new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)) // HexEncoder
+    ); // StringSource
+    std::cout << "key: " << encoded << std::endl;
+
+    // Pretty print
+    encoded.clear();
+    CryptoPP::StringSource(iv, sizeof(iv), true,
+        new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)) // HexEncoder
+    ); // StringSource
+    std::cout << "iv: " << encoded << std::endl;
+
+    // Pretty print
+    encoded.clear();
+    CryptoPP::StringSource(adata, true,
+        new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)) // HexEncoder
+    ); // StringSource
+    std::cout << "adata: " << encoded << std::endl;
+
+    // Pretty print
+    encoded.clear();
+    CryptoPP::StringSource(pdata, true,
+        new CryptoPP::HexEncoder(
+            new CryptoPP::StringSink(encoded)) // HexEncoder
+    ); // StringSource
+    std::cout << "pdata: " << encoded << std::endl;
+
+    /*********************************\
+	\*********************************/
+
+    try {
+        CryptoPP::EAX<CryptoPP::AES>::Encryption e;
+        e.SetKeyWithIV(key, key.size(), iv, sizeof(iv));
+        // Not required for EAX mode (but required for CCM mode)
+        // e.SpecifyDataLengths( adata.size(), pdata.size(), 0 );
+
+        CryptoPP::AuthenticatedEncryptionFilter ef(e,
+            new CryptoPP::StringSink(cipher),
+            false, TAG_SIZE); // AuthenticatedEncryptionFilter
+
+        // AuthenticatedEncryptionFilter::ChannelPut
+        //  defines two channels: "" (empty) and "AAD"
+        //   channel "" is encrypted and authenticated
+        //   channel "AAD" is authenticated
+        ef.ChannelPut("AAD", (const byte*)adata.data(), adata.size());
+        ef.ChannelMessageEnd("AAD");
+
+        // Authenticated data *must* be pushed before
+        //  Confidential/Authenticated data. Otherwise
+        //  we must catch the BadState exception
+        ef.ChannelPut("", (const byte*)pdata.data(), pdata.size());
+        ef.ChannelMessageEnd("");
+
+        // Pretty print
+        encoded.clear();
+        CryptoPP::StringSource(cipher, true,
+            new CryptoPP::HexEncoder(
+                new CryptoPP::StringSink(encoded)) // HexEncoder
+        ); // StringSource
+        std::cout << "cipher: " << encoded << std::endl;
+    }
+    catch (CryptoPP::BufferedTransformation::NoChannelSupport& e) {
+        // The tag must go in to the default channel:
+        //  "unknown: this object doesn't support multiple channels"
+        std::cerr << "Caught NoChannelSupport..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+    catch (CryptoPP::AuthenticatedSymmetricCipher::BadState& e) {
+        // Pushing PDATA before ADATA results in:
+        //  "GMC/AES: Update was called before State_IVSet"
+        std::cerr << "Caught BadState..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+    catch (CryptoPP::InvalidArgument& e) {
+        std::cerr << "Caught InvalidArgument..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+
+    /*********************************\
+	\*********************************/
+
+    // Attack the first and last byte
+    //if( cipher.size() > 1 )
+    //{
+    //  cipher[ 0 ] ^= 0x01;
+    //  cipher[ cipher.size()-1 ] ^= 0x01;
+    //}
+
+    /*********************************\
+	\*********************************/
+
+    try {
+        CryptoPP::EAX<CryptoPP::AES>::Decryption d;
+        d.SetKeyWithIV(key, key.size(), iv, sizeof(iv));
+
+        // Break the cipher text out into it's
+        //  components: Encrypted Data and MAC Value
+        std::string enc = cipher.substr(0, cipher.length() - TAG_SIZE);
+        std::string mac = cipher.substr(cipher.length() - TAG_SIZE);
+
+        // Sanity checks
+        assert(cipher.size() == enc.size() + mac.size());
+        assert(enc.size() == pdata.size());
+        assert(TAG_SIZE == mac.size());
+
+        // Not recovered - sent via clear channel
+        radata = adata;
+
+        CryptoPP::AuthenticatedDecryptionFilter df(d, NULL,
+            CryptoPP::AuthenticatedDecryptionFilter::MAC_AT_BEGIN | CryptoPP::AuthenticatedDecryptionFilter::THROW_EXCEPTION, TAG_SIZE);
+
+        // The order of the following calls are important
+        df.ChannelPut("", (const byte*)mac.data(), mac.size());
+        df.ChannelPut("AAD", (const byte*)adata.data(), adata.size());
+        df.ChannelPut("", (const byte*)enc.data(), enc.size());
+
+        // If the object throws, it will most likely occur
+        //  during ChannelMessageEnd()
+        df.ChannelMessageEnd("AAD");
+        df.ChannelMessageEnd("");
+
+        // If the object does not throw, here's the only
+        //  opportunity to check the data's integrity
+        bool b = false;
+        b = df.GetLastResult();
+        assert(true == b);
+
+        // Remove data from channel
+        std::string retrieved;
+        size_t n = (size_t)-1;
+
+        // Plain text recovered from enc.data()
+        df.SetRetrievalChannel("");
+        n = (size_t)df.MaxRetrievable();
+        retrieved.resize(n);
+
+        if (n > 0) {
+            df.Get((byte*)retrieved.data(), n);
+        }
+        rpdata = retrieved;
+        assert(rpdata == pdata);
+
+        // All is well - work with data
+
+        // Pretty print
+        encoded.clear();
+        CryptoPP::StringSource(radata, true,
+            new CryptoPP::HexEncoder(
+                new CryptoPP::StringSink(encoded)) // HexEncoder
+        ); // StringSource
+        std::cout << "adata (received): " << encoded << std::endl;
+
+        encoded.clear();
+        CryptoPP::StringSource(rpdata, true,
+            new CryptoPP::HexEncoder(
+                new CryptoPP::StringSink(encoded)) // HexEncoder
+        ); // StringSource
+        std::cout << "pdata (recovered): " << encoded << std::endl;
+    }
+    catch (CryptoPP::InvalidArgument& e) {
+        std::cerr << "Caught InvalidArgument..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+    catch (CryptoPP::AuthenticatedSymmetricCipher::BadState& e) {
+        // Pushing PDATA before ADATA results in:
+        //  "GMC/AES: Update was called before State_IVSet"
+        std::cerr << "Caught BadState..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+    catch (CryptoPP::HashVerificationFilter::HashVerificationFailed& e) {
+        std::cerr << "Caught HashVerificationFailed..." << std::endl;
+        std::cerr << e.what() << std::endl;
+        std::cerr << std::endl;
+    }
+
+/*********************************\
+	\*********************************/
+#endif
     //TODO: How AES and DH works
 #if 0
 	try {
@@ -1456,6 +1768,10 @@ int main(int argc, char* argv[])
     ml.writeMessageBtnR.h = 60;
     ml.writeMessageBtnR.x = 0;
     ml.writeMessageBtnR.y = windowHeight - ml.writeMessageBtnR.h;
+    ml.historyT = IMG_LoadTexture(renderer, "res/history.png");
+    ml.historyBtnR = ml.writeMessageBtnR;
+    ml.historyBtnR.x = ml.writeMessageBtnR.x + ml.writeMessageBtnR.w + 5;
+    ml.historyBtnR.y = ml.writeMessageBtnR.y;
     ml.nameR.w = 200;
     ml.nameR.h = 30;
     ml.nameR.x = ml.writeMessageBtnR.x + ml.writeMessageBtnR.w;
@@ -1502,7 +1818,7 @@ int main(int argc, char* argv[])
     closeBtnR.h = 64;
     closeBtnR.x = 0;
     closeBtnR.y = 0;
-    Text topicText; // TODO: Do something when it goes out of right window border
+    Text topicText; // TODO: Do something when it goes out of right window border. It should display ... in message list and be wrapped in message content.
     topicText.setText(renderer, robotoF, "");
     topicText.dstR = closeBtnR;
     topicText.dstR.h = 20;
@@ -1555,6 +1871,7 @@ int main(int argc, char* argv[])
     attachmentsScrollBtnR.h = 30;
     attachmentsScrollBtnR.x = attachmentsScrollR.x;
     attachmentsScrollBtnR.y = attachmentsScrollR.y;
+    State previousState = State::MessageList;
 #endif
 #if 1 // NOTE: MessageSend
     SDL_Texture* sendT = IMG_LoadTexture(renderer, "res/send.png");
@@ -1576,7 +1893,7 @@ int main(int argc, char* argv[])
     msSwapBtnR.x = closeBtnR.x + closeBtnR.w;
     msSwapBtnR.y = closeBtnR.y;
     Text msNameText;
-    msNameText.setText(renderer, robotoF, u8"Nazwa", { 255,255,255 });
+    msNameText.setText(renderer, robotoF, u8"Nazwa", { 255, 255, 255 });
     msNameText.dstR.w = 60;
     msNameText.dstR.h = 20;
     msNameText.dstR.x = msSwapBtnR.x + msSwapBtnR.w + getValueFromValueAndPercent(windowWidth - closeBtnR.w, 50) / 2 - msNameText.dstR.w / 2;
@@ -1621,6 +1938,14 @@ int main(int argc, char* argv[])
     std::string msTopic;
     std::string msMessage;
     bool shouldUseFirstWidgets = true;
+#endif
+#if 1 // NOTE: MessageHistory
+    MessageHistory mh;
+    mh.messageListT = IMG_LoadTexture(renderer, "res/messageList.png");
+    mh.messageListBtnR.w = 256;
+    mh.messageListBtnR.h = 60;
+    mh.messageListBtnR.x = 0;
+    mh.messageListBtnR.y = windowHeight - mh.messageListBtnR.h;
 #endif
 #if 0 // NOTE: Call
     bool isDisconnectedLocally = false;
@@ -1765,6 +2090,7 @@ int main(int argc, char* argv[])
                         if (ml.messages[i].r.y + ml.messages[i].r.h < ml.writeMessageBtnR.y) {
                             if (SDL_PointInFRect(&mousePos, &ml.messages[i].r)) {
                                 state = State::MessageContent;
+                                previousState = State::MessageList;
                                 messageIndexToShow = i;
                                 texts.clear();
                                 {
@@ -1810,6 +2136,9 @@ int main(int argc, char* argv[])
                     if (SDL_PointInFRect(&mousePos, &ml.writeMessageBtnR)) {
                         state = State::MessageSend;
                         msAttachmentsScrollBtnR.y = msAttachmentsScrollR.y;
+                    }
+                    if (SDL_PointInFRect(&mousePos, &ml.historyBtnR)) {
+                        state = State::MessageHistory;
                     }
 #ifdef CALL
                     else if (SDL_PointInFRect(&mousePos, &ml.nameR)) {
@@ -1946,7 +2275,7 @@ int main(int argc, char* argv[])
                     newMessages.back().topicText.text = it->child("topic").text().as_string();
                     newMessages.back().senderNameText.text = it->child("senderName").text().as_string();
                     newMessages.back().contentText.text = it->child("content").text().as_string();
-                    newMessages.back().dateText.text = it->child("date").text().as_string();
+                    newMessages.back().dateText.text = it->child("dateTime").text().as_string();
                     int attachmentNodesCount = it->child("attachmentNodesCount").text().as_int();
                     auto attachmentNodes = it->children("attachment");
                     for (pugi::xml_node& attachmentNode : attachmentNodes) {
@@ -2046,6 +2375,7 @@ int main(int argc, char* argv[])
                 }
             }
             SDL_RenderCopyF(renderer, ml.writeMessageT, 0, &ml.writeMessageBtnR);
+            SDL_RenderCopyF(renderer, ml.historyT, 0, &ml.historyBtnR);
 #ifdef CALL
             SDL_RenderCopyF(renderer, ml.callT, 0, &ml.callBtnR);
             SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -2092,49 +2422,102 @@ int main(int argc, char* argv[])
                 if (event.type == SDL_MOUSEBUTTONDOWN) {
                     buttons[event.button.button] = true;
                     if (SDL_PointInFRect(&mousePos, &closeBtnR)) {
-                        state = State::MessageList;
-                        for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                            if (i == 0) {
-                                ml.messages[messageIndexToShow].attachments[i].text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+                        state = previousState;
+                        if (previousState == State::MessageList) {
+                            for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+                                if (i == 0) {
+                                    ml.messages[messageIndexToShow].attachments[i].text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+                                }
+                                else {
+                                    ml.messages[messageIndexToShow].attachments[i].text.dstR.y = ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.y + ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
+                                }
                             }
-                            else {
-                                ml.messages[messageIndexToShow].attachments[i].text.dstR.y = ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.y + ml.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
+                        }
+                        else if (previousState == State::MessageHistory) {
+                            for (int i = 0; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                                if (i == 0) {
+                                    mh.messages[messageIndexToShow].attachments[i].text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+                                }
+                                else {
+                                    mh.messages[messageIndexToShow].attachments[i].text.dstR.y = mh.messages[messageIndexToShow].attachments[i - 1].text.dstR.y + mh.messages[messageIndexToShow].attachments[i - 1].text.dstR.h;
+                                }
                             }
                         }
                     }
-                    for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                        if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR) && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentsScrollR.y) {
-                            std::wstring path;
-                            {
-                                wchar_t* p = 0;
-                                SHGetKnownFolderPath(FOLDERID_Downloads, 0, 0, &p);
-                                std::wstringstream ss;
-                                ss << p;
-                                path = ss.str();
-                                CoTaskMemFree(static_cast<void*>(p));
-                            }
-                            {
-                                std::string filename = getFilename(ml.messages[messageIndexToShow].attachments[i].path);
-                                std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
-                                bool shouldSave = true;
-                                if (exists(finalPath)) {
-                                    SDL_SysWMinfo wmInfo;
-                                    SDL_VERSION(&wmInfo.version);
-                                    SDL_GetWindowWMInfo(window, &wmInfo);
-                                    HWND hwnd = wmInfo.info.win.window;
-                                    std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
-                                    int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
-                                    if (result == IDYES) {
-                                        ;
+                    if (previousState == State::MessageList) {
+                        for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+                            if (SDL_PointInFRect(&mousePos, &ml.messages[messageIndexToShow].attachments[i].text.dstR) && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentsScrollR.y) {
+                                std::wstring path;
+                                {
+                                    wchar_t* p = 0;
+                                    SHGetKnownFolderPath(FOLDERID_Downloads, 0, 0, &p);
+                                    std::wstringstream ss;
+                                    ss << p;
+                                    path = ss.str();
+                                    CoTaskMemFree(static_cast<void*>(p));
+                                }
+                                {
+                                    std::string filename = getFilename(ml.messages[messageIndexToShow].attachments[i].path);
+                                    std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
+                                    bool shouldSave = true;
+                                    if (exists(finalPath)) {
+                                        SDL_SysWMinfo wmInfo;
+                                        SDL_VERSION(&wmInfo.version);
+                                        SDL_GetWindowWMInfo(window, &wmInfo);
+                                        HWND hwnd = wmInfo.info.win.window;
+                                        std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
+                                        int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
+                                        if (result == IDYES) {
+                                            ;
+                                        }
+                                        else if (result == IDNO) {
+                                            shouldSave = false;
+                                        }
                                     }
-                                    else if (result == IDNO) {
-                                        shouldSave = false;
+                                    if (shouldSave) {
+                                        std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
+                                        ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+                                        ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
                                     }
                                 }
-                                if (shouldSave) {
-                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
-                                    ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
-                                    ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
+                            }
+                        }
+                    }
+                    else if (previousState == State::MessageHistory) {
+                        for (int i = 0; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                            if (SDL_PointInFRect(&mousePos, &mh.messages[messageIndexToShow].attachments[i].text.dstR) && mh.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentsScrollR.y) {
+                                std::wstring path;
+                                {
+                                    wchar_t* p = 0;
+                                    SHGetKnownFolderPath(FOLDERID_Downloads, 0, 0, &p);
+                                    std::wstringstream ss;
+                                    ss << p;
+                                    path = ss.str();
+                                    CoTaskMemFree(static_cast<void*>(p));
+                                }
+                                {
+                                    std::string filename = getFilename(mh.messages[messageIndexToShow].attachments[i].path);
+                                    std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
+                                    bool shouldSave = true;
+                                    if (exists(finalPath)) {
+                                        SDL_SysWMinfo wmInfo;
+                                        SDL_VERSION(&wmInfo.version);
+                                        SDL_GetWindowWMInfo(window, &wmInfo);
+                                        HWND hwnd = wmInfo.info.win.window;
+                                        std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
+                                        int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
+                                        if (result == IDYES) {
+                                            ;
+                                        }
+                                        else if (result == IDNO) {
+                                            shouldSave = false;
+                                        }
+                                    }
+                                    if (shouldSave) {
+                                        std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
+                                        ofs << mh.messages[messageIndexToShow].attachments[i].fileContent;
+                                        ShellExecute(0, L"open", path.c_str(), 0, 0, SW_SHOWDEFAULT);
+                                    }
                                 }
                             }
                         }
@@ -2149,7 +2532,7 @@ int main(int argc, char* argv[])
                             path = ss.str();
                             CoTaskMemFree(static_cast<void*>(p));
                         }
-                        {
+                        if (previousState == State::MessageList) {
                             for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
                                 std::string filename = getFilename(ml.messages[messageIndexToShow].attachments[i].path);
                                 std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
@@ -2171,6 +2554,31 @@ int main(int argc, char* argv[])
                                 if (shouldSave) {
                                     std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
                                     ofs << ml.messages[messageIndexToShow].attachments[i].fileContent;
+                                }
+                            }
+                        }
+                        else if (previousState == State::MessageHistory) {
+                            for (int i = 0; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                                std::string filename = getFilename(mh.messages[messageIndexToShow].attachments[i].path);
+                                std::wstring finalPath = path + L"\\" + converter.from_bytes(filename);
+                                bool shouldSave = true;
+                                if (exists(finalPath)) {
+                                    SDL_SysWMinfo wmInfo;
+                                    SDL_VERSION(&wmInfo.version);
+                                    SDL_GetWindowWMInfo(window, &wmInfo);
+                                    HWND hwnd = wmInfo.info.win.window;
+                                    std::wstring caption = std::wstring(L"Czy chcesz nadpisać ten plik? ") + converter.from_bytes(filename);
+                                    int result = MessageBox(hwnd, caption.c_str(), L"Ten plik istnieje", MB_YESNO);
+                                    if (result == IDYES) {
+                                        ;
+                                    }
+                                    else if (result == IDNO) {
+                                        shouldSave = false;
+                                    }
+                                }
+                                if (shouldSave) {
+                                    std::ofstream ofs(ws2s(finalPath), std::ofstream::out);
+                                    ofs << mh.messages[messageIndexToShow].attachments[i].fileContent;
                                 }
                             }
                         }
@@ -2202,46 +2610,91 @@ int main(int argc, char* argv[])
                     else if (SDL_PointInFRect(&mousePos, &attachmentR) || SDL_PointInFRect(&mousePos, &attachmentsScrollR)) {
                         if (event.wheel.y > 0) // scroll up
                         {
-                            if (!ml.messages[messageIndexToShow].attachments.empty()) {
-                                float minY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
-                                for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                                    minY = std::min(minY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
-                                }
-                                if (minY < attachmentR.y) {
-                                    for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
-                                        attachment.text.dstR.y += attachment.text.dstR.h;
+                            if (previousState == State::MessageList) {
+                                if (!ml.messages[messageIndexToShow].attachments.empty()) {
+                                    float minY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
+                                    for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+                                        minY = std::min(minY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
                                     }
-                                    float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
-                                    float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
-                                    float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
-                                    float min = 0;
-                                    attachmentsScrollBtnR.y -= (percent * (max - min) / 100) + min;
+                                    if (minY < attachmentR.y) {
+                                        for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
+                                            attachment.text.dstR.y += attachment.text.dstR.h;
+                                        }
+                                        float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+                                        float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
+                                        float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+                                        float min = 0;
+                                        attachmentsScrollBtnR.y -= (percent * (max - min) / 100) + min;
+                                    }
+                                }
+                            }
+                            else if (previousState == State::MessageHistory) {
+                                if (!mh.messages[messageIndexToShow].attachments.empty()) {
+                                    float minY = mh.messages[messageIndexToShow].attachments.front().text.dstR.y;
+                                    for (int i = 1; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                                        minY = std::min(minY, mh.messages[messageIndexToShow].attachments[i].text.dstR.y);
+                                    }
+                                    if (minY < attachmentR.y) {
+                                        for (Attachment& attachment : mh.messages[messageIndexToShow].attachments) {
+                                            attachment.text.dstR.y += attachment.text.dstR.h;
+                                        }
+                                        float maxVisible = attachmentR.h / mh.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+                                        float percent = 100 / (mh.messages[messageIndexToShow].attachments.size() - maxVisible);
+                                        float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+                                        float min = 0;
+                                        attachmentsScrollBtnR.y -= (percent * (max - min) / 100) + min;
+                                    }
                                 }
                             }
                         }
                         else if (event.wheel.y < 0) // scroll down
                         {
-                            if (!ml.messages[messageIndexToShow].attachments.empty()) {
-                                float maxY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
-                                for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                                    maxY = std::max(maxY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
-                                }
-                                if (maxY >= attachmentR.y + attachmentR.h) {
-                                    for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
-                                        attachment.text.dstR.y -= attachment.text.dstR.h;
+                            if (previousState == State::MessageList) {
+                                if (!ml.messages[messageIndexToShow].attachments.empty()) {
+                                    float maxY = ml.messages[messageIndexToShow].attachments.front().text.dstR.y;
+                                    for (int i = 1; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+                                        maxY = std::max(maxY, ml.messages[messageIndexToShow].attachments[i].text.dstR.y);
                                     }
-                                    float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
-                                    float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
-                                    float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
-                                    float min = 0;
-                                    attachmentsScrollBtnR.y += (percent * (max - min) / 100) + min;
+                                    if (maxY >= attachmentR.y + attachmentR.h) {
+                                        for (Attachment& attachment : ml.messages[messageIndexToShow].attachments) {
+                                            attachment.text.dstR.y -= attachment.text.dstR.h;
+                                        }
+                                        float maxVisible = attachmentR.h / ml.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+                                        float percent = 100 / (ml.messages[messageIndexToShow].attachments.size() - maxVisible);
+                                        float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+                                        float min = 0;
+                                        attachmentsScrollBtnR.y += (percent * (max - min) / 100) + min;
+                                    }
+                                }
+                            }
+                            else if (previousState == State::MessageHistory) {
+                                if (!mh.messages[messageIndexToShow].attachments.empty()) {
+                                    float maxY = mh.messages[messageIndexToShow].attachments.front().text.dstR.y;
+                                    for (int i = 1; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                                        maxY = std::max(maxY, mh.messages[messageIndexToShow].attachments[i].text.dstR.y);
+                                    }
+                                    if (maxY >= attachmentR.y + attachmentR.h) {
+                                        for (Attachment& attachment : mh.messages[messageIndexToShow].attachments) {
+                                            attachment.text.dstR.y -= attachment.text.dstR.h;
+                                        }
+                                        float maxVisible = attachmentR.h / mh.messages[messageIndexToShow].attachments.front().text.dstR.h; // NOTE: Assume that items have same height
+                                        float percent = 100 / (mh.messages[messageIndexToShow].attachments.size() - maxVisible);
+                                        float max = 0 + attachmentsScrollR.h - attachmentsScrollBtnR.h;
+                                        float min = 0;
+                                        attachmentsScrollBtnR.y += (percent * (max - min) / 100) + min;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            topicText.setText(renderer, robotoF, ml.messages[messageIndexToShow].topicText.text);
+            if (previousState == State::MessageList) {
+                topicText.setText(renderer, robotoF, ml.messages[messageIndexToShow].topicText.text);
+            }
+            else if (previousState == State::MessageHistory) {
+                topicText.setText(renderer, robotoF, mh.messages[messageIndexToShow].topicText.text);
+            }
             topicText.dstR.x = closeBtnR.x + closeBtnR.w + (windowWidth - closeBtnR.w) / 2 - topicText.dstR.w / 2;
             topicText.dstR.y = closeBtnR.h / 2 - topicText.dstR.h / 2;
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
@@ -2288,13 +2741,26 @@ int main(int argc, char* argv[])
                 }
             }
             attachmentsText.draw(renderer);
-            for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
-                if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
-                    SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
-                    ml.messages[messageIndexToShow].attachments[i].bgR = ml.messages[messageIndexToShow].attachments[i].text.dstR;
-                    ml.messages[messageIndexToShow].attachments[i].bgR.w += 50;
-                    SDL_RenderFillRectF(renderer, &ml.messages[messageIndexToShow].attachments[i].bgR);
-                    ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
+            if (previousState == State::MessageList) {
+                for (int i = 0; i < ml.messages[messageIndexToShow].attachments.size(); ++i) {
+                    if (ml.messages[messageIndexToShow].attachments[i].text.dstR.y + ml.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h && ml.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
+                        SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
+                        ml.messages[messageIndexToShow].attachments[i].bgR = ml.messages[messageIndexToShow].attachments[i].text.dstR;
+                        ml.messages[messageIndexToShow].attachments[i].bgR.w += 50;
+                        SDL_RenderFillRectF(renderer, &ml.messages[messageIndexToShow].attachments[i].bgR);
+                        ml.messages[messageIndexToShow].attachments[i].text.draw(renderer);
+                    }
+                }
+            }
+            else if (previousState == State::MessageHistory) {
+                for (int i = 0; i < mh.messages[messageIndexToShow].attachments.size(); ++i) {
+                    if (mh.messages[messageIndexToShow].attachments[i].text.dstR.y + mh.messages[messageIndexToShow].attachments[i].text.dstR.h <= attachmentR.y + attachmentR.h && mh.messages[messageIndexToShow].attachments[i].text.dstR.y >= attachmentR.y) {
+                        SDL_SetRenderDrawColor(renderer, 125, 55, 34, 0);
+                        mh.messages[messageIndexToShow].attachments[i].bgR = mh.messages[messageIndexToShow].attachments[i].text.dstR;
+                        mh.messages[messageIndexToShow].attachments[i].bgR.w += 50;
+                        SDL_RenderFillRectF(renderer, &mh.messages[messageIndexToShow].attachments[i].bgR);
+                        mh.messages[messageIndexToShow].attachments[i].text.draw(renderer);
+                    }
                 }
             }
             SDL_RenderCopyF(renderer, downloadT, 0, &downloadBtnR);
@@ -2317,6 +2783,10 @@ int main(int argc, char* argv[])
                 }
                 if (event.type == SDL_KEYDOWN) {
                     keys[event.key.keysym.scancode] = true;
+                    if ((event.key.keysym.mod & KMOD_LCTRL || event.key.keysym.mod & KMOD_RCTRL) && event.key.keysym.scancode == SDL_SCANCODE_RETURN) {
+                        sendMessage(socket, msNameText, msReceiver, msTopic, msMessage, renderer, robotoF, msAttachments);
+                        shouldUseFirstWidgets = !shouldUseFirstWidgets;
+                    }
                 }
                 if (event.type == SDL_KEYUP) {
                     keys[event.key.keysym.scancode] = false;
@@ -2329,10 +2799,10 @@ int main(int argc, char* argv[])
                     }
                     if (SDL_PointInFRect(&mousePos, &msSwapBtnR)) {
                         if (msNameText.text == "Klasa") {
-                            msNameText.setText(renderer, robotoF, "Nazwa", {255,255,255});
+                            msNameText.setText(renderer, robotoF, "Nazwa", { 255, 255, 255 });
                         }
                         else {
-                            msNameText.setText(renderer, robotoF, "Klasa", {255,255,255});
+                            msNameText.setText(renderer, robotoF, "Klasa", { 255, 255, 255 });
                         }
                     }
                     if (SDL_PointInFRect(&mousePos, &msSendBtnR)) {
@@ -2515,6 +2985,195 @@ int main(int argc, char* argv[])
             SDL_SetRenderDrawColor(renderer, 77, 77, 77, 255);
             SDL_RenderFillRectF(renderer, &msAttachmentsScrollBtnR);
             SDL_RenderCopyF(renderer, swapT, 0, &msSwapBtnR);
+            SDL_RenderPresent(renderer);
+        }
+        else if (state == State::MessageHistory) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                    running = false;
+                    // NOTE: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+                }
+                if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                    SDL_RenderSetScale(renderer, event.window.data1 / (float)windowWidth, event.window.data2 / (float)windowHeight);
+                }
+                if (event.type == SDL_KEYDOWN) {
+                    keys[event.key.keysym.scancode] = true;
+                }
+                if (event.type == SDL_KEYUP) {
+                    keys[event.key.keysym.scancode] = false;
+                }
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    buttons[event.button.button] = true;
+                    if (SDL_PointInFRect(&mousePos, &mh.messageListBtnR)) {
+                        state = State::MessageList;
+                    }
+                    for (int i = 0; i < mh.messages.size(); ++i) {
+                        if (mh.messages[i].r.y + mh.messages[i].r.h < mh.messageListBtnR.y) {
+                            if (SDL_PointInFRect(&mousePos, &mh.messages[i].r)) {
+                                state = State::MessageContent;
+                                previousState = State::MessageHistory;
+                                messageIndexToShow = i;
+                                texts.clear();
+                                {
+                                    std::stringstream ss(mh.messages[messageIndexToShow].contentText.text);
+                                    texts.push_back(Text());
+                                    texts.back() = mh.messages[messageIndexToShow].contentText;
+#if 1 // NOTE: Purpose - delete new line characters which shouldn't be displayed + split into new lines
+                                    while (std::getline(ss, texts.back().text, '\n')) {
+                                        texts.back().autoAdjustW = true;
+                                        texts.back().wMultiplier = 0.3;
+                                        texts.back().dstR.h = mh.messageListBtnR.h / 3;
+                                        texts.back().dstR.x = 0;
+                                        texts.back().dstR.y = closeBtnR.y + closeBtnR.h;
+                                        texts.back().setText(renderer, robotoF, texts.back().text);
+                                        texts.push_back(Text());
+                                        texts.back() = mh.messages[messageIndexToShow].contentText;
+                                    }
+                                    texts.pop_back();
+#endif
+                                    if (!texts.empty()) {
+                                        for (int i = 1; i < texts.size(); ++i) {
+                                            texts[i].dstR.y = texts[i - 1].dstR.y + texts[i - 1].dstR.h;
+                                        }
+                                        if (scroll == Scroll::Up) {
+                                            for (Text& text : texts) {
+                                                text.dstR.y += text.dstR.h;
+                                            }
+                                        }
+                                        else if (scroll == Scroll::Down) {
+                                            for (Text& text : texts) {
+                                                text.dstR.y -= text.dstR.h;
+                                            }
+                                        }
+                                        scroll = Scroll::Non;
+                                    }
+                                }
+                                scrollBtnR.y = scrollR.y;
+                                attachmentsScrollBtnR.y = attachmentsScrollR.y;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (event.type == SDL_MOUSEBUTTONUP) {
+                    buttons[event.button.button] = false;
+                }
+                if (event.type == SDL_MOUSEMOTION) {
+                    float scaleX, scaleY;
+                    SDL_RenderGetScale(renderer, &scaleX, &scaleY);
+                    mousePos.x = event.motion.x / scaleX;
+                    mousePos.y = event.motion.y / scaleY;
+                    realMousePos.x = event.motion.x;
+                    realMousePos.y = event.motion.y;
+                }
+            }
+            {
+                pugi::xml_document doc;
+                pugi::xml_node rootNode = doc.append_child("root");
+                rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::ReceiveSentMessages).c_str());
+                std::stringstream ss;
+                doc.save(ss);
+                send(socket, ss.str());
+            }
+            std::string receiveMsg;
+            receive(socket, receiveMsg); // TODO: Do something on fail + put it on separate thread?
+            std::vector<Message> messages;
+            messages.push_back(Message());
+            {
+                pugi::xml_document doc;
+                doc.load_string(receiveMsg.c_str());
+                auto messageNodes = doc.child("root").children("message");
+                int i = 0;
+                for (auto it = messageNodes.begin(); it != messageNodes.end(); ++it) {
+                    messages.back().topicText.text = it->child("topic").text().as_string();
+                    if (it->child("receiverName")) {
+                        messages.back().receiverNameText.text = it->child("receiverName").text().as_string();
+                    }
+                    else {
+                        messages.back().receiverNameText.text = it->child("classReceiverName").text().as_string();
+                    }
+                    messages.back().contentText.text = it->child("content").text().as_string();
+                    messages.back().dateText.text = it->child("dateTime").text().as_string();
+                    int attachmentNodesCount = it->child("attachmentNodesCount").text().as_int();
+                    auto attachmentNodes = it->children("attachment");
+                    for (pugi::xml_node& attachmentNode : attachmentNodes) {
+                        messages.back().attachments.push_back(Attachment());
+                        messages.back().attachments.back().path = attachmentNode.child("path").text().as_string();
+                        messages.back().attachments.back().fileContent = attachmentNode.child("fileContent").text().as_string();
+                        messages.back().attachments.back().text.autoAdjustW = true;
+                        messages.back().attachments.back().text.wMultiplier = 0.2;
+                        messages.back().attachments.back().text.setText(renderer, robotoF, getFilename(messages.back().attachments.back().path), { 255, 255, 255 });
+                        messages.back().attachments.back().text.dstR.h = 20;
+                        messages.back().attachments.back().text.dstR.x = 0;
+                        if (messages.back().attachments.size() == 1) {
+                            messages.back().attachments.back().text.dstR.y = attachmentsText.dstR.y + attachmentsText.dstR.h;
+                        }
+                        else {
+                            messages.back().attachments.back().text.dstR.y = messages.back().attachments[messages.back().attachments.size() - 2].text.dstR.y + messages.back().attachments[messages.back().attachments.size() - 2].text.dstR.h;
+                        }
+                    }
+
+                    messages.back().r.w = windowWidth;
+                    messages.back().r.h = 20;
+                    messages.back().r.x = 0;
+                    messages.back().r.y = messages.back().r.h * i;
+
+                    messages.back().topicText.dstR = messages.back().r;
+                    messages.back().topicText.autoAdjustW = true;
+                    messages.back().topicText.setText(renderer, robotoF, messages.back().topicText.text);
+                    messages.back().topicText.dstR.w *= 0.3;
+
+                    messages.back().dateText.dstR = messages.back().r;
+                    messages.back().dateText.autoAdjustW = true;
+                    messages.back().dateText.setText(renderer, robotoF, messages.back().dateText.text);
+                    messages.back().dateText.dstR.w *= 0.3;
+                    messages.back().dateText.dstR.x = windowWidth - messages.back().dateText.dstR.w - 3;
+
+                    messages.back().receiverNameText.dstR = messages.back().r;
+                    messages.back().receiverNameText.autoAdjustW = true;
+                    messages.back().receiverNameText.setText(renderer, robotoF, (it->child("receiverName") ? "To: " : "To class: ") + messages.back().receiverNameText.text);
+                    messages.back().receiverNameText.dstR.w *= 0.3;
+                    messages.back().receiverNameText.dstR.x = messages.back().dateText.dstR.x - messages.back().receiverNameText.dstR.w - 10;
+
+                    messages.back().contentText.dstR = messages.back().topicText.dstR;
+                    messages.back().contentText.dstR.x = closeBtnR.x + closeBtnR.w + 2;
+                    messages.back().contentText.autoAdjustW = true;
+                    messages.back().contentText.setText(renderer, robotoF, messages.back().contentText.text);
+                    messages.back().contentText.dstR.w *= 0.3;
+
+                    messages.push_back(Message());
+                    ++i;
+                }
+            }
+            messages.pop_back();
+            if (mh.messages.size() != messages.size()) {
+                mh.messages = messages;
+            }
+            else {
+                for (int i = 0; i < mh.messages.size(); ++i) {
+                    if (mh.messages[i].topicText.text != messages[i].topicText.text || mh.messages[i].receiverNameText.text != messages[i].receiverNameText.text || mh.messages[i].dateText.text != messages[i].dateText.text || mh.messages[i].contentText.text != messages[i].contentText.text) {
+                        mh.messages = messages;
+                        break;
+                    }
+                }
+            }
+
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+            SDL_RenderClear(renderer);
+            for (int i = 0; i < mh.messages.size(); ++i) {
+                if (mh.messages[i].r.y + mh.messages[i].r.h < mh.messageListBtnR.y) {
+                    SDL_SetRenderDrawColor(renderer, 37, 37, 68, 0);
+                    SDL_RenderFillRectF(renderer, &mh.messages[i].r);
+                    SDL_SetRenderDrawColor(renderer, 25, 25, 25, 0);
+                    SDL_RenderDrawRectF(renderer, &mh.messages[i].r);
+                    mh.messages[i].topicText.draw(renderer);
+                    mh.messages[i].receiverNameText.draw(renderer);
+                    mh.messages[i].dateText.draw(renderer);
+                }
+            }
+            SDL_RenderCopyF(renderer, mh.messageListT, 0, &mh.messageListBtnR);
             SDL_RenderPresent(renderer);
         }
     }
