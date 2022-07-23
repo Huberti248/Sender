@@ -3,7 +3,7 @@ TODO:
 - Try to test polish character path + polish filename + polish characters in file send as attachment from one PC to another + think about possible bugs (on server at least filename doesn't contain polish characters)
 - When adding attachments with big size the program doesn't respond. Display some info about it?
 - When std::wstring is send to the server, std::wstring should be received from client on the server
-- Prevent: DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
+- Prevent: Brute force, DoS and DDoS attacks, TCP SYN flood attack, Teardrop attack, Smurf attack, Ping of death attack?, Botnets?, Eavesdropping attack (just use encryption), Birthday attack (what's that)???
 - Chekout getSize() and popBack() functions for exotic characters as well as remember to use them for every place where polish character might be placed
 - Before final release remember to delete not used code from the server (in case of security)
 - Some mechanism to automatically disconnect some clients which haven't responded for a very long time?
@@ -11,11 +11,23 @@ TODO:
 - Date time may depend on server Windows settings. It might be important when moving server to a different PC. Make it the same for all PC. Also think what date time should be displayed on the client (use this Windows settings?)
 - It might be a good idea to implement encryption algorithms from stretch in order to understand them and their limitations (like how much time would it be necessary to break them e.g. brute force)
 - Think what will happen when user exceeds e.g. character limit (more characters than there could be in int data type)
-- Allow to see sent messages by the user?
 - Add https or encryption
-- Add call?
+- Add call
+- Put call receiver check for call in every state. Are there going to be some bugs e.g. in MessageSend (am I going to loose a message? If yes, do something about it)
+- Add sound when someone is calling to you? Allow to disable this sound? Or disable it by default and allow ti enable it.
+- Add voice test and allow to choose microphone
+- Add camera during call (note that it sometimes doesn't work very well on MS Teams (it have lags), so that I could do better
+- Add logout button
+- Add don't logout when program will be closed
 - Add desktop sharing?
 - Make it resolution independent (responsive)?
+- Even that inputs doesn't have focus in MessageSend state ctrl+enter causes send. Fix that?
+- Add icons for users? Allow to change them and delete
+- Julia's idea: Add one can add people to friends and easly call to them (My idea: Maybe just provide history of people which you sent message to so that you can click it and write message to that person or maybe have it prompt you the words
+- Julia's idea: Add translation of messages?
+- Allow to display image attachment directly in a program (image preview) - this saves time of the user if he only wants to preview it
+- Mother's idea: Messages should be marked as readed
+- There is a bug that when images are send from server to client on client when you try to open them it says that we doesn't support this file format (it's caused by send() message max length) - it might destroy user data in attachments when sending -> fix that
 */
 #ifdef __linux__
 #include <SDL2/SDL.h>
@@ -101,12 +113,12 @@ namespace fs = std::__fs::filesystem;
 namespace fs = std::filesystem;
 #endif
 #ifdef _WIN32
+#endif
 #include <Shlobj.h>
 #include <shellapi.h>
 #include <windows.h>
-#endif
 
-//using namespace std::chrono_literals;
+// using namespace std::chrono_literals;
 
 // NOTE: Remember to uncomment it on every release
 //#define RELEASE 1
@@ -115,10 +127,10 @@ namespace fs = std::filesystem;
 #pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
 #endif
 
-//240 x 240 (smart watch)
-//240 x 320 (QVGA)
-//360 x 640 (Galaxy S5)
-//640 x 480 (480i - Smallest PC monitor)
+// 240 x 240 (smart watch)
+// 240 x 320 (QVGA)
+// 360 x 640 (Galaxy S5)
+// 640 x 480 (480i - Smallest PC monitor)
 
 int windowWidth = 240;
 int windowHeight = 320;
@@ -129,8 +141,8 @@ bool buttons[SDL_BUTTON_X2 + 1];
 SDL_Renderer* renderer;
 std::string prefPath;
 std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-//std::string narrow = converter.to_bytes(wide_utf16_source_string);
-//std::wstring wide = converter.from_bytes(narrow_utf8_source_string);
+// std::string narrow = converter.to_bytes(wide_utf16_source_string);
+// std::wstring wide = converter.from_bytes(narrow_utf8_source_string);
 
 #ifndef RELEASE
 #define SERVER
@@ -154,29 +166,16 @@ const int TAG_SIZE = 12;
 #undef SendMessage
 
 enum PacketType : i32 {
-    TestMessage,
-    Dh,
+    SendMessageToClass,
+    SendMessage,
     Login,
     LoginSuccess,
     LoginFailure,
-    SendMessage,
-    SendMessageToClass,
     ReceiveMessages,
     ReceiveSentMessages,
-    MakeCall,
-    CheckCalls,
-    PendingCall,
-    NoPendingCall,
-    AcceptCall,
-    IsCallAccepted,
-    CallIsAccepted,
-    CallIsNotAccepted,
-    SendCallerAudioData,
-    SendReceiverAudioData,
-    GetCallerAudioData,
-    GetReceiverAudioData,
-    DisconnectCall,
-    DoesCallExits,
+    PendingCall1,
+    HasCall2,
+    CallAccepted3,
 };
 
 std::wstring toWstring(std::string str)
@@ -462,7 +461,9 @@ enum class State {
     MessageContent,
     MessageSend,
     MessageHistory,
+    CallInitialization,
     Call,
+    Calling,
 };
 
 struct Attachment {
@@ -651,6 +652,8 @@ struct Client {
     std::string name;
     std::string className;
     bool isLogged = false;
+    bool hasCall = false;
+    std::string caller;
 };
 
 std::vector<Client> clients;
@@ -674,6 +677,25 @@ bool exists(std::wstring path)
     return fs::exists(path);
 #endif
 }
+
+struct Clock {
+    Uint64 start = SDL_GetPerformanceCounter();
+
+    float getElapsedTime()
+    {
+        Uint64 stop = SDL_GetPerformanceCounter();
+        float secondsElapsed = (stop - start) / (float)SDL_GetPerformanceFrequency();
+        return secondsElapsed * 1000;
+    }
+
+    float restart()
+    {
+        Uint64 stop = SDL_GetPerformanceCounter();
+        float secondsElapsed = (stop - start) / (float)SDL_GetPerformanceFrequency();
+        start = SDL_GetPerformanceCounter();
+        return secondsElapsed * 1000;
+    }
+};
 
 void runServer()
 {
@@ -944,6 +966,40 @@ void runServer()
                                     }
                                     d.save_file((prefPath + "data.xml").c_str());
                                 }
+                                else if (packetType == PacketType::PendingCall1) {
+                                    pugi::xml_node callReceiverNameNode = doc.child("root").child("callReceiverName");
+                                    std::string callReceiverName = callReceiverNameNode.text().as_string();
+                                    // TODO: On found and logged in send it to receiver and put creator into calling state
+                                    for (int j = 0; j < clients.size(); ++j) {
+                                        if (clients[j].name == callReceiverName) {
+                                            clients[j].hasCall = true;
+                                            clients[j].caller = clients[i].name;
+                                            // TODO: What to do when user is not logged in?
+                                        }
+                                    }
+                                }
+                                else if (packetType == PacketType::HasCall2) {
+                                    // TODO: Do something when two people at the same time are calling to someone
+                                    pugi::xml_document doc;
+                                    pugi::xml_node rootNode = doc.append_child("root");
+                                    pugi::xml_node hasCallNode = rootNode.append_child("hasCall");
+                                    hasCallNode.append_child(pugi::node_pcdata).set_value(clients[i].hasCall ? "true" : "false");
+                                    pugi::xml_node callCreatorNameNode = rootNode.append_child("callCreatorName");
+                                    callCreatorNameNode.append_child(pugi::node_pcdata).set_value(clients[i].caller.c_str());
+                                    std::stringstream ss;
+                                    doc.save(ss);
+                                    send(clients[i].socket, ss.str());
+                                }
+                                else if (packetType == PacketType::CallAccepted3) {
+                                    // TODO: What if user will simulate PacketType::CallAccepted packet send on the client?
+                                    for (int j = 0; j < clients.size(); ++j) {
+                                        if (clients[j].name == clients[i].caller) {
+                                            clients[j].hasCall = true;
+                                            clients[j].caller = clients[i].name;
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             else {
                                 // TODO: Possibly cheat
@@ -952,10 +1008,10 @@ void runServer()
                     }
                     else {
                         /*
-						NOTE:
-							An error may have occured, but sometimes you can just ignore it
-							It may be good to disconnect sock because it is likely invalid now.
-						*/
+                                                NOTE:
+                                                        An error may have occured, but sometimes you can just ignore it
+                                                        It may be good to disconnect sock because it is likely invalid now.
+                                                */
                     }
                 }
             }
@@ -973,6 +1029,7 @@ struct MessageList {
     std::vector<Message> messages;
     SDL_Texture* writeMessageT = 0;
     SDL_Texture* historyT = 0;
+    SDL_Texture* callT = 0;
     SDL_FRect writeMessageBtnR{};
     SDL_FRect historyBtnR{};
     SDL_FRect callBtnR{};
@@ -984,12 +1041,24 @@ struct MessageList {
     Text callerNameText;
     CallState callState = CallState::Non;
     Text userInfoText;
+    bool hasCall = false;
+    SDL_FRect acceptCallBtnR{};
+    SDL_FRect declineCallBtnR{};
+    SDL_Texture* acceptCallT = 0;
+    SDL_Texture* declineCallT = 0;
+    Text callCreatorNameText;
 };
 
 struct MessageHistory {
     SDL_Texture* messageListT = 0;
     std::vector<Message> messages;
     SDL_FRect messageListBtnR{};
+};
+
+struct Call {
+    std::string name;
+    SDL_FRect callBtnR{};
+    SDL_FRect backBtnR{};
 };
 
 std::string getFilename(std::string s)
@@ -1019,15 +1088,15 @@ void sendLoginAndPasswordToServer(std::string login, std::string password, TTF_F
 {
 
     /*
-						TODO:
-							(DONE)
+                                                TODO:
+                                                        (DONE)
 
-							Someone might modify program behaviour and get into later states. Protect againts that.
-							Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
+                                                        Someone might modify program behaviour and get into later states. Protect againts that.
+                                                        Note that event if server will keep current user state, someone might change his username in State::messageList and get someone else messages.
 
-							One way to fix it might be to add user name to struct Client on server side + add bool isLoggedIn + check both before sending all user messages from db to client on
-							PacketType::ReceiveMessages (then there is no need to send user name from user to the server anymore I guess - it might be got from clients[i].[...])
-						*/
+                                                        One way to fix it might be to add user name to struct Client on server side + add bool isLoggedIn + check both before sending all user messages from db to client on
+                                                        PacketType::ReceiveMessages (then there is no need to send user name from user to the server anymore I guess - it might be got from clients[i].[...])
+                                                */
 
     // TODO: Encrypt the data on the client and decrypt it on the server
     // TODO: Add Crypto++ library to preamke + learn how to use AES
@@ -1074,7 +1143,7 @@ void textCentered(std::string text)
     ImGui::Text(text.c_str());
 }
 
-int main(int argc, char* argv[])
+void run()
 {
 #if 0 // TODO: How to transfer key/iv to the server xor from server to the client? Do I need to transfer it or should I generate new iv for each message?
     CryptoPP::SecByteBlock key(CryptoPP::AES::DEFAULT_KEYLENGTH);
@@ -1323,7 +1392,7 @@ int main(int argc, char* argv[])
 /*********************************\
 	\*********************************/
 #endif
-    //TODO: How AES and DH works
+    // TODO: How AES and DH works
 #if 0
 	try {
 		// RFC 5114, 1024-bit MODP Group with 160-bit Prime Order Subgroup
@@ -1551,7 +1620,7 @@ int main(int argc, char* argv[])
     SDL_LogSetOutputFunction(logOutputCallback, 0);
     SDL_Init(SDL_INIT_EVERYTHING);
     TTF_Init();
-    SDLNet_Init();
+    SDLNet_Init(); // TODO: Handle error?
 #ifdef _WIN32
     NFD_Init();
 #endif
@@ -1729,15 +1798,14 @@ int main(int argc, char* argv[])
 
 	}
 #endif
-    std::string programName = removeExtension(getFilename(argv[0]));
 #if 1 && !RELEASE // TODO: Remember to turn it off on reelase
-    SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
+    SDL_Window* window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
     SDL_DisplayMode dm;
     SDL_GetCurrentDisplayMode(0, &dm);
     windowWidth = dm.w;
     windowHeight = dm.h;
 #else
-    SDL_Window* window = SDL_CreateWindow(programName.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
+    SDL_Window* window = SDL_CreateWindow("Sender", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
     SDL_DisplayMode dm;
     SDL_GetCurrentDisplayMode(0, &dm);
     windowWidth = dm.w;
@@ -1772,6 +1840,10 @@ int main(int argc, char* argv[])
     ml.historyBtnR = ml.writeMessageBtnR;
     ml.historyBtnR.x = ml.writeMessageBtnR.x + ml.writeMessageBtnR.w + 5;
     ml.historyBtnR.y = ml.writeMessageBtnR.y;
+    ml.callT = IMG_LoadTexture(renderer, "res/call.png");
+    ml.callBtnR = ml.historyBtnR;
+    ml.callBtnR.x = ml.historyBtnR.x + ml.historyBtnR.w + 5;
+    ml.callBtnR.y = ml.historyBtnR.y;
     ml.nameR.w = 200;
     ml.nameR.h = 30;
     ml.nameR.x = ml.writeMessageBtnR.x + ml.writeMessageBtnR.w;
@@ -1786,10 +1858,6 @@ int main(int argc, char* argv[])
     ml.nameText.dstR.h = 20;
     ml.nameText.dstR.x = ml.nameR.x + ml.nameR.w / 2 - ml.nameText.dstR.w / 2;
     ml.nameText.dstR.y = ml.writeMessageBtnR.y;
-    ml.callBtnR.w = 256;
-    ml.callBtnR.h = 60;
-    ml.callBtnR.x = ml.nameR.x + ml.nameR.w;
-    ml.callBtnR.y = windowHeight - ml.callBtnR.h;
     ml.pickUpBtnR.w = 256;
     ml.pickUpBtnR.h = 60;
     ml.pickUpBtnR.x = ml.callBtnR.x + ml.callBtnR.w + 5;
@@ -1807,6 +1875,17 @@ int main(int argc, char* argv[])
     ml.userInfoText.dstR.x += 3;
     ml.userInfoText.autoAdjustW = true;
     ml.userInfoText.wMultiplier = 0.5;
+    ml.acceptCallBtnR = ml.callBtnR;
+    ml.acceptCallBtnR.x = ml.callBtnR.x + ml.callBtnR.w + 5;
+    ml.declineCallBtnR = ml.acceptCallBtnR;
+    ml.declineCallBtnR.x = ml.acceptCallBtnR.x + ml.acceptCallBtnR.w + 5;
+    ml.acceptCallT = IMG_LoadTexture(renderer, "res/acceptCall.png");
+    ml.declineCallT = IMG_LoadTexture(renderer, "res/declineCall.png");
+    ml.callCreatorNameText.dstR.h = 16;
+    ml.callCreatorNameText.dstR.x = ml.acceptCallBtnR.x;
+    ml.callCreatorNameText.dstR.y = ml.acceptCallBtnR.y - ml.callCreatorNameText.dstR.h;
+    ml.callCreatorNameText.autoAdjustW = true; // TODO: Do something when it goes out of border
+    ml.callCreatorNameText.setText(renderer, robotoF, "");
     std::string callerName;
     std::string receiverName;
 #endif
@@ -1965,6 +2044,33 @@ int main(int argc, char* argv[])
     disconnectBtnR.h = 64;
     disconnectBtnR.x = windowWidth / 2 - disconnectBtnR.w / 2;
     disconnectBtnR.y = windowHeight - disconnectBtnR.h;
+#endif
+#if 1 // NOTE: Call
+    Call c;
+    c.callBtnR.w = 128;
+    c.callBtnR.h = 32;
+    c.callBtnR.x = windowWidth / 2 - c.callBtnR.w / 2;
+    c.callBtnR.y = 450;
+    c.backBtnR.w = 64;
+    c.backBtnR.h = 64;
+    c.backBtnR.x = 0;
+    c.backBtnR.y = 0;
+    SDL_Texture* backT = IMG_LoadTexture(renderer, "res/back.png");
+#endif
+#if 1 // NOTE: Calling
+    SDL_Texture* endCallT = IMG_LoadTexture(renderer, "res/endCall.png");
+    Text callingText;
+    callingText.autoAdjustW = true;
+    callingText.setText(renderer, robotoF, "Calling");
+    callingText.dstR.h = 32;
+    callingText.dstR.x = windowWidth / 2 - callingText.dstR.w / 2;
+    callingText.dstR.y = windowHeight / 2 - callingText.dstR.h / 2;
+    SDL_FRect endCallR;
+    endCallR.w = 64;
+    endCallR.h = 64;
+    endCallR.x = 657.5 + 281+1;
+    endCallR.y = callingText.dstR.y + callingText.dstR.h / 2 - endCallR.h / 2;
+    Clock callingTextClock;
 #endif
     int messageIndexToShow = -1;
     IMGUI_CHECKVERSION();
@@ -2140,6 +2246,21 @@ int main(int argc, char* argv[])
                     if (SDL_PointInFRect(&mousePos, &ml.historyBtnR)) {
                         state = State::MessageHistory;
                     }
+                    if (SDL_PointInFRect(&mousePos, &ml.callBtnR)) {
+                        state = State::CallInitialization;
+                    }
+                    if (SDL_PointInFRect(&mousePos, &ml.acceptCallBtnR)) {
+                        state = State::Call;
+                        pugi::xml_document doc;
+                        pugi::xml_node rootNode = doc.append_child("root");
+                        rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::CallAccepted3).c_str());
+                        std::stringstream ss;
+                        doc.save(ss);
+                        send(socket, ss.str());
+                    }
+                    if (SDL_PointInFRect(&mousePos, &ml.declineCallBtnR)) {
+                        // TODO: Implement
+                    }
 #ifdef CALL
                     else if (SDL_PointInFRect(&mousePos, &ml.nameR)) {
                         ml.isNameSelected = true;
@@ -2230,6 +2351,23 @@ int main(int argc, char* argv[])
                     }
 #endif
                 }
+            }
+            {
+                pugi::xml_document doc;
+                pugi::xml_node rootNode = doc.append_child("root");
+                rootNode.append_child("packetType").append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::HasCall2).c_str());
+                std::stringstream ss;
+                doc.save(ss);
+                send(socket, ss.str());
+            }
+            {
+                std::string receiveMsg;
+                receive(socket, receiveMsg);
+                pugi::xml_document doc;
+                doc.load_string(receiveMsg.c_str());
+                pugi::xml_node hasCallNode = doc.child("root").child("hasCall");
+                ml.hasCall = hasCallNode.text().as_bool();
+                ml.callCreatorNameText.setText(renderer, robotoF, doc.child("root").child("callCreatorName").text().as_string());
             }
 #ifdef CALL
             if (isCaller) {
@@ -2376,6 +2514,7 @@ int main(int argc, char* argv[])
             }
             SDL_RenderCopyF(renderer, ml.writeMessageT, 0, &ml.writeMessageBtnR);
             SDL_RenderCopyF(renderer, ml.historyT, 0, &ml.historyBtnR);
+            SDL_RenderCopyF(renderer, ml.callT, 0, &ml.callBtnR);
 #ifdef CALL
             SDL_RenderCopyF(renderer, ml.callT, 0, &ml.callBtnR);
             SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -2400,6 +2539,11 @@ int main(int argc, char* argv[])
             ml.userInfoText.dstR.x = windowWidth - ml.userInfoText.dstR.w;
             ml.userInfoText.dstR.y = windowHeight - ml.userInfoText.dstR.h;
             ml.userInfoText.draw(renderer);
+            if (ml.hasCall) {
+                SDL_RenderCopyF(renderer, ml.acceptCallT, 0, &ml.acceptCallBtnR);
+                SDL_RenderCopyF(renderer, ml.declineCallT, 0, &ml.declineCallBtnR);
+                ml.callCreatorNameText.draw(renderer);
+            }
             SDL_RenderPresent(renderer);
         }
         else if (state == State::MessageContent) {
@@ -3176,7 +3320,146 @@ int main(int argc, char* argv[])
             SDL_RenderCopyF(renderer, mh.messageListT, 0, &mh.messageListBtnR);
             SDL_RenderPresent(renderer);
         }
+        else if (state == State::CallInitialization) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                    running = false;
+                    // NOTE: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+                }
+                if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                    SDL_RenderSetScale(renderer, event.window.data1 / (float)windowWidth, event.window.data2 / (float)windowHeight);
+                }
+                if (event.type == SDL_KEYDOWN) {
+                    keys[event.key.keysym.scancode] = true;
+                }
+                if (event.type == SDL_KEYUP) {
+                    keys[event.key.keysym.scancode] = false;
+                }
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    buttons[event.button.button] = true;
+                    if (SDL_PointInFRect(&mousePos, &c.callBtnR)) {
+                        /*
+                            TODO:
+                            It should check whether call receiver is online.
+                            When call receiver is currently during a call it should act differently.
+                            How to do a call creation?
+                        */
+                        // TODO: Send pending call to client. Allow call creator to discard pending call
+                        // TODO: On client check for pending call. On pending call display accept/discard call (green and red handset)
+                        // TODO: Send answer to call creator and on accept go into call state and on discard go into call state
+                        // TODO: I shouldn't be able to call to myself
+                        pugi::xml_document doc;
+                        pugi::xml_node rootNode = doc.append_child("root");
+                        pugi::xml_node packetTypeNode = rootNode.append_child("packetType");
+                        packetTypeNode.append_child(pugi::node_pcdata).set_value(std::to_string(PacketType::PendingCall1).c_str());
+                        pugi::xml_node callReceiverNameNode = rootNode.append_child("callReceiverName");
+                        callReceiverNameNode.append_child(pugi::node_pcdata).set_value(c.name.c_str());
+                        std::stringstream ss;
+                        doc.save(ss);
+                        send(socket, ss.str()); // TODO: Do something on fail + put it on separate thread?
+                        state = State::Calling;
+                    }
+                    if (SDL_PointInFRect(&mousePos, &c.backBtnR)) {
+                        state = State::MessageList;
+                    }
+                }
+                if (event.type == SDL_MOUSEBUTTONUP) {
+                    buttons[event.button.button] = false;
+                }
+                if (event.type == SDL_MOUSEMOTION) {
+                    float scaleX, scaleY;
+                    SDL_RenderGetScale(renderer, &scaleX, &scaleY);
+                    mousePos.x = event.motion.x / scaleX;
+                    mousePos.y = event.motion.y / scaleY;
+                    realMousePos.x = event.motion.x;
+                    realMousePos.y = event.motion.y;
+                }
+            }
+            ImGui_ImplSDLRenderer_NewFrame();
+            ImGui_ImplSDL2_NewFrame(window);
+            io.MousePos.x = mousePos.x;
+            io.MousePos.y = mousePos.y;
+            ImGui::NewFrame();
+            ImGui::Begin("Window", 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
+            ImGui::InputTextWithHint("##Name", "Name", &c.name);
+            ImGui::End();
+            ImGui::Render();
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+            SDL_RenderClear(renderer);
+            ImGui_ImplSDLRenderer_RenderDrawData(ImGui::GetDrawData());
+            SDL_RenderSetViewport(renderer, 0);
+            SDL_RenderCopyF(renderer, ml.callT, 0, &c.callBtnR);
+            SDL_RenderCopyF(renderer, backT, 0, &c.backBtnR);
+            SDL_RenderPresent(renderer);
+        }
+        else if (state == State::Calling) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+                if (event.type == SDL_QUIT || event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                    running = false;
+                    // NOTE: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+                }
+                if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                    SDL_RenderSetScale(renderer, event.window.data1 / (float)windowWidth, event.window.data2 / (float)windowHeight);
+                }
+                if (event.type == SDL_KEYDOWN) {
+                    keys[event.key.keysym.scancode] = true;
+                }
+                if (event.type == SDL_KEYUP) {
+                    keys[event.key.keysym.scancode] = false;
+                }
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    buttons[event.button.button] = true;
+                    if (SDL_PointInFRect(&mousePos,&endCallR)) {
+                        state = State::CallInitialization;
+                    }
+                }
+                if (event.type == SDL_MOUSEBUTTONUP) {
+                    buttons[event.button.button] = false;
+                }
+                if (event.type == SDL_MOUSEMOTION) {
+                    float scaleX, scaleY;
+                    SDL_RenderGetScale(renderer, &scaleX, &scaleY);
+                    mousePos.x = event.motion.x / scaleX;
+                    mousePos.y = event.motion.y / scaleY;
+                    realMousePos.x = event.motion.x;
+                    realMousePos.y = event.motion.y;
+                }
+            }
+            // TODO: Check how long call to another person take before "poczta glosowa" and implement that in here (time before call end). Also say something?
+            // TODO: But is above todo necessary?
+            if (callingTextClock.getElapsedTime() > 500) {
+                callingTextClock.restart();
+                if (callingText.text.size() == 10) {
+                    callingText.setText(renderer, robotoF, "Calling");
+                }
+                else {
+                    callingText.setText(renderer, robotoF, callingText.text + ".");
+                }
+            }
+            ImGui_ImplSDLRenderer_NewFrame();
+            ImGui_ImplSDL2_NewFrame(window);
+            io.MousePos.x = mousePos.x;
+            io.MousePos.y = mousePos.y;
+            ImGui::NewFrame();
+            ImGui::Render();
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+            SDL_RenderClear(renderer);
+            ImGui_ImplSDLRenderer_RenderDrawData(ImGui::GetDrawData());
+            SDL_RenderSetViewport(renderer, 0);
+            SDL_RenderCopyF(renderer, endCallT, 0, &endCallR);
+            callingText.draw(renderer);
+            SDL_RenderPresent(renderer);
+        }
     }
-    // TODO: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+    // NOTE: On mobile remember to use eventWatch function (it doesn't reach this code when terminating)
+}
+
+int main(int argc, char* argv[])
+{
+    run();
     return 0;
 }
