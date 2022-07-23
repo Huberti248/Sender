@@ -1,7 +1,0 @@
-﻿---
-BasedOnStyle: WebKit
-BreakBeforeBraces: Stroustrup
-SortIncludes: 'false'
-SpaceBeforeCpp11BracedList: 'false'
-
-...

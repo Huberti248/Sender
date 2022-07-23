@@ -1,1 +1,0 @@
-cling < interpreterCommands.txt

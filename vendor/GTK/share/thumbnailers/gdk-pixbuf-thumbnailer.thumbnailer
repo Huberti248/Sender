@@ -1,4 +1,0 @@
-[Thumbnailer Entry]
-TryExec=C:/gtk-build/gtk/Win32/release/bin/gdk-pixbuf-thumbnailer
-Exec=C:/gtk-build/gtk/Win32/release/bin/gdk-pixbuf-thumbnailer -s %s %u %o
-MimeType=image/png;application/x-navi-animation;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-xpixmap;image/x-xbitmap;image/x-tga;image/x-icns;image/jp2;image/jpeg2000;image/jpx;image/x-quicktime;image/qtif;image/bmp;image/x-bmp;image/x-MS-bmp;application/emf;application/x-emf;image/emf;image/x-emf;image/x-mgx-emf;image/gif;image/x-icon;image/x-ico;image/jpeg;image/tiff;image/wmf;image/x-wmf;
